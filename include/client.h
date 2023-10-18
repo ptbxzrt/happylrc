@@ -7,7 +7,8 @@
 
 class Client {
 public:
-  Client();
+  Client(std::string ip, int port, std::string coordinator_ip,
+         int coordinator_port);
 
   std::unique_ptr<coro_rpc::coro_rpc_client> &get_rpc_client();
   void connect_to_coordinator();
@@ -18,4 +19,10 @@ public:
 
 private:
   std::unique_ptr<coro_rpc::coro_rpc_client> rpc_client_{nullptr};
+  asio::io_context io_context_;
+  int port_for_transfer_data_;
+  std::string ip_;
+  std::string coordinator_ip_;
+  int coordinator_port_;
+  asio::ip::tcp::acceptor acceptor_;
 };

@@ -22,3 +22,9 @@ add_executable(run_coordinator
     src/coordinator/coordinator.cpp
     src/coordinator/run_coordinator.cpp
     src/utils.cpp)
+
+add_executable(run_proxy
+    include/proxy.h
+    src/proxy/proxy.cpp
+    src/proxy/run_proxy.cpp
+    src/utils.cpp)

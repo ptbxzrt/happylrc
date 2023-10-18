@@ -34,3 +34,18 @@ generate_unique_random_strings(int key_length, int value_length) {
 
   return std::make_pair(key, value);
 }
+
+int random_index(size_t len) {
+  std::random_device rd;
+  std::mt19937 gen(rd());
+  std::uniform_int_distribution<int> dist(0, len - 1);
+  return dist(gen);
+}
+
+void exit_when(bool condition, const std::source_location &location) {
+  if (!condition) {
+    std::cerr << "条件失败于 " << location.file_name() << ":" << location.line()
+              << " - " << location.function_name() << std::endl;
+    std::exit(EXIT_FAILURE);
+  }
+}

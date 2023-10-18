@@ -12,7 +12,7 @@ int main(int argc, char **argv) {
     args.push_back(argv[i]);
   }
 
-  assert(args.size() >= 8);
+  my_assert(args.size() >= 8);
 
   EC_schema ec_schema;
 
@@ -27,7 +27,7 @@ int main(int argc, char **argv) {
   } else if (args[1] == "Azure_LRC_1") {
     ec_schema.encode_type = Encode_Type::Azure_LRC_1;
   } else {
-    assert(false);
+    my_assert(false);
   }
 
   Placement_Type placement_type;
@@ -38,7 +38,7 @@ int main(int argc, char **argv) {
   } else if (args[2] == "strategy1") {
     ec_schema.placement_type = Placement_Type::strategy1;
   } else {
-    assert(false);
+    my_assert(false);
   }
 
   int value_length = -1;
@@ -46,7 +46,7 @@ int main(int argc, char **argv) {
     ec_schema.k = std::stoi(args[3]);
     ec_schema.real_l = std::stoi(args[4]);
     // 只考虑k被l整除的情况
-    assert(ec_schema.k % ec_schema.real_l == 0);
+    my_assert(ec_schema.real_l == -1 || ec_schema.k % ec_schema.real_l == 0);
     ec_schema.b = ec_schema.k / ec_schema.real_l;
     ec_schema.g = std::stoi(args[5]);
     ec_schema.strip_size_upper = std::stoi(args[6]);
@@ -55,7 +55,8 @@ int main(int argc, char **argv) {
     std::cerr << e.what() << '\n';
   }
 
-  Client client;
+  Client client("0.0.0.0", CLIENT_TRANSFER_DATA_PORT, "0.0.0.0",
+                COORDINATOR_RPC_PORT);
   client.connect_to_coordinator();
 
   client.set_ec_parameter(ec_schema);
@@ -65,7 +66,7 @@ int main(int argc, char **argv) {
   key_value_s[key] = value;
   client.set(key, value);
   auto stored_value = client.get(key);
-  assert(stored_value == value);
+  my_assert(stored_value == value);
 
   return 0;
 }
