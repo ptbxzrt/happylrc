@@ -49,3 +49,21 @@ void exit_when(bool condition, const std::source_location &location) {
     std::exit(EXIT_FAILURE);
   }
 }
+
+int bytes_to_int(std::vector<unsigned char> &bytes) {
+  int integer;
+  unsigned char *p = (unsigned char *)(&integer);
+  for (int i = 0; i < int(bytes.size()); i++) {
+    memcpy(p + i, &bytes[i], 1);
+  }
+  return integer;
+}
+
+std::vector<unsigned char> int_to_bytes(int integer) {
+  std::vector<unsigned char> bytes(sizeof(int));
+  unsigned char *p = (unsigned char *)(&integer);
+  for (int i = 0; i < int(bytes.size()); i++) {
+    memcpy(&bytes[i], p + i, 1);
+  }
+  return bytes;
+}

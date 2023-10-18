@@ -1,19 +1,65 @@
 #include "../../include/coordinator.h"
+#include "../../include/tinyxml2.h"
 
 std::string Coordinator::echo(std::string s) { return s + "zhaohao"; }
 
-Coordinator::Coordinator(std::string ip, int port) : ip_(ip), port_(port) {
+Coordinator::Coordinator(std::string ip, int port, std::string config_file_path)
+    : ip_(ip), port_(port), config_file_path_(config_file_path) {
   rpc_server_ = std::make_unique<coro_rpc::coro_rpc_server>(1, port_);
   rpc_server_->register_handler<&Coordinator::set_erasure_coding_parameters>(
       this);
   rpc_server_->register_handler<&Coordinator::check_commit>(this);
   rpc_server_->register_handler<&Coordinator::ask_for_data>(this);
   rpc_server_->register_handler<&Coordinator::echo>(this);
+  rpc_server_->register_handler<&Coordinator::commit_object>(this);
+
+  init_cluster_info();
+  init_proxy_info();
 }
 
 Coordinator::~Coordinator() { rpc_server_->stop(); }
 
-void Coordinator::start_rpc_server() { auto err_code = rpc_server_->start(); }
+void Coordinator::start() { auto err = rpc_server_->start(); }
+
+void Coordinator::init_cluster_info() {
+  tinyxml2::XMLDocument xml;
+  xml.LoadFile(config_file_path_.c_str());
+  tinyxml2::XMLElement *root = xml.RootElement();
+  unsigned int node_id = 0;
+
+  for (tinyxml2::XMLElement *cluster = root->FirstChildElement();
+       cluster != nullptr; cluster = cluster->NextSiblingElement()) {
+    unsigned int cluster_id(std::stoi(cluster->Attribute("id")));
+    std::string proxy(cluster->Attribute("proxy"));
+
+    cluster_info_[cluster_id].cluster_id = cluster_id;
+    auto pos = proxy.find(':');
+    cluster_info_[cluster_id].proxy_ip = proxy.substr(0, pos);
+    cluster_info_[cluster_id].proxy_port =
+        std::stoi(proxy.substr(pos + 1, proxy.size()));
+
+    for (tinyxml2::XMLElement *node =
+             cluster->FirstChildElement()->FirstChildElement();
+         node != nullptr; node = node->NextSiblingElement()) {
+      cluster_info_[cluster_id].nodes.push_back(node_id);
+
+      std::string node_uri(node->Attribute("uri"));
+      node_info_[node_id].node_id = node_id;
+      auto pos = node_uri.find(':');
+      node_info_[node_id].ip = node_uri.substr(0, pos);
+      node_info_[node_id].port =
+          std::stoi(node_uri.substr(pos + 1, node_uri.size()));
+      node_info_[node_id].cluster_id = cluster_id;
+      node_id++;
+    }
+  }
+}
+
+void Coordinator::init_proxy_info() {
+  for (auto cur = cluster_info_.begin(); cur != cluster_info_.end(); cur++) {
+    connect_to_proxy(cur->second.proxy_ip, cur->second.proxy_port);
+  }
+}
 
 bool Coordinator::set_erasure_coding_parameters(EC_schema ec_schema) {
   ec_schema_ = ec_schema;
@@ -149,7 +195,7 @@ void Coordinator::init_placement(placement_info &placement, std::string key,
 
 void Coordinator::connect_to_proxy(std::string ip, int port) {
   std::string location = ip + std::to_string(port);
-  assert(proxys_.contains(location) == false);
+  my_assert(proxys_.contains(location) == false);
 
   proxys_[location] = std::make_unique<coro_rpc::coro_rpc_client>();
   async_simple::coro::syncAwait(
@@ -162,6 +208,15 @@ bool Coordinator::check_commit(std::string key) {
     cv_.wait(lck);
   }
   return true;
+}
+
+void Coordinator::commit_object(std::string key) {
+  std::unique_lock<std::mutex> lck(mutex_);
+  my_assert(commited_object_info_.contains(key) == false &&
+            objects_waiting_commit_.contains(key) == true);
+  commited_object_info_[key] = objects_waiting_commit_[key];
+  cv_.notify_all();
+  objects_waiting_commit_.erase(key);
 }
 
 size_t Coordinator::ask_for_data(std::string key, std::string client_ip,

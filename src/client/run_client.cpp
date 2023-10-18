@@ -18,25 +18,20 @@ int main(int argc, char **argv) {
 
   ec_schema.partial_decoding = (args[0] == "true");
 
-  if (args[1] == "RS") {
-    ec_schema.encode_type = Encode_Type::RS;
-  } else if (args[1] == "OPPO_LRC") {
-    ec_schema.encode_type = Encode_Type::OPPO_LRC;
-  } else if (args[1] == "Azure_LRC") {
+  if (args[1] == "Azure_LRC") {
     ec_schema.encode_type = Encode_Type::Azure_LRC;
-  } else if (args[1] == "Azure_LRC_1") {
-    ec_schema.encode_type = Encode_Type::Azure_LRC_1;
-  } else {
-    my_assert(false);
   }
+  { my_assert(false); }
 
   Placement_Type placement_type;
   if (args[2] == "random") {
     ec_schema.placement_type = Placement_Type::random;
   } else if (args[2] == "flat") {
     ec_schema.placement_type = Placement_Type::flat;
-  } else if (args[2] == "strategy1") {
-    ec_schema.placement_type = Placement_Type::strategy1;
+  } else if (args[2] == "strategy_ECWIDE") {
+    ec_schema.placement_type = Placement_Type::strategy_ECWIDE;
+  } else if (args[2] == "strategy_BEST") {
+    ec_schema.placement_type = Placement_Type::strategy_BEST;
   } else {
     my_assert(false);
   }
@@ -59,7 +54,6 @@ int main(int argc, char **argv) {
   // 因为这个IP地址会被proxy使用
   Client client("0.0.0.0", CLIENT_TRANSFER_DATA_PORT, "0.0.0.0",
                 COORDINATOR_RPC_PORT);
-  client.connect_to_coordinator();
 
   client.set_ec_parameter(ec_schema);
 

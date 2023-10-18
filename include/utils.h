@@ -1,5 +1,6 @@
 #pragma once
 
+#include "string.h"
 #include <cstdlib>
 #include <ctime>
 #include <iostream>
@@ -14,9 +15,9 @@
 #define my_assert(condition)                                                   \
   exit_when((condition), std::source_location::current())
 
-enum class Encode_Type { RS, OPPO_LRC, Azure_LRC, Azure_LRC_1 };
+enum class Encode_Type { Azure_LRC };
 
-enum class Placement_Type { random, flat, strategy1 };
+enum class Placement_Type { random, flat, strategy_ECWIDE, strategy_BEST };
 
 typedef struct {
   bool partial_decoding;
@@ -48,6 +49,7 @@ typedef struct {
 
 typedef struct {
   unsigned int node_id;
+  unsigned int cluster_id;
   std::string ip;
   int port;
 } node_item;
@@ -87,3 +89,7 @@ generate_unique_random_strings(int key_length, int value_length);
 int random_index(size_t len);
 
 void exit_when(bool condition, const std::source_location &location);
+
+int bytes_to_int(std::vector<unsigned char> &bytes);
+
+std::vector<unsigned char> int_to_bytes(int integer);

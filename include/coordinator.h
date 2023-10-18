@@ -9,11 +9,10 @@
 
 class Coordinator {
 public:
-  Coordinator(std::string ip, int port);
+  Coordinator(std::string ip, int port, std::string config_file_path);
   ~Coordinator();
 
-  void start_rpc_server();
-  void connect_to_proxy(std::string ip, int port);
+  void start();
 
   // rpc调用
   bool set_erasure_coding_parameters(EC_schema ec_schema);
@@ -21,6 +20,7 @@ public:
                                                  size_t value_len);
   bool check_commit(std::string key);
   size_t ask_for_data(std::string key, std::string client_ip, int client_port);
+  void commit_object(std::string key);
 
   std::string echo(std::string s);
 
@@ -31,6 +31,9 @@ private:
   void init_placement(placement_info &placement, std::string key,
                       size_t value_len, size_t block_size,
                       size_t tail_block_size);
+  void connect_to_proxy(std::string ip, int port);
+  void init_cluster_info();
+  void init_proxy_info();
 
   std::unique_ptr<coro_rpc::coro_rpc_server> rpc_server_{nullptr};
   EC_schema ec_schema_;
@@ -50,4 +53,5 @@ private:
       proxys_;
   std::string ip_;
   int port_;
+  std::string config_file_path_;
 };
