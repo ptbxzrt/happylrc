@@ -9,7 +9,7 @@
 
 class Coordinator {
 public:
-  Coordinator(std::string ip, int port = COORDINATOR_RPC_PORT);
+  Coordinator(std::string ip, int port);
   ~Coordinator();
 
   void start_rpc_server();

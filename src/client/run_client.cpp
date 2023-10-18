@@ -55,6 +55,8 @@ int main(int argc, char **argv) {
     std::cerr << e.what() << '\n';
   }
 
+  // 如果部署在集群上, 一定要将client ip地址设置为1个实际的IP地址, 而非"0.0.0.0"
+  // 因为这个IP地址会被proxy使用
   Client client("0.0.0.0", CLIENT_TRANSFER_DATA_PORT, "0.0.0.0",
                 COORDINATOR_RPC_PORT);
   client.connect_to_coordinator();
