@@ -425,6 +425,7 @@ void Proxy::main_repair(main_repair_plan repair_plan) {
         char **coding = (char **)coding_v.data();
 
         for (auto i = 0; i < repair_plan.failed_blocks_index.size(); i++) {
+          // 这一步的意义是，从help_matrix中找到存活块对应的系数
           int *coff = &(help_matrix[i * k]);
           std::vector<int> coding_matrix(1 * num_of_live_blocks_in_cur_cluster,
                                          1);
@@ -649,6 +650,7 @@ void Proxy::help_repair(help_repair_plan repair_plan) {
         char **coding = (char **)coding_v.data();
 
         for (auto i = 0; i < repair_plan.failed_blocks_index.size(); i++) {
+          // 这一步的意义是，从help_matrix中找到存活块对应的系数
           int *coff = &(help_matrix[i * k]);
           std::vector<int> coding_matrix(1 * num_of_live_blocks_in_cur_cluster,
                                          1);

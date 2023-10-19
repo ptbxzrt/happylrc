@@ -43,6 +43,13 @@ private:
       std::vector<unsigned int> &repair_span_cluster,
       std::vector<std::pair<unsigned int, int>>
           &new_locations_with_block_index);
+  std::vector<std::vector<int>> partition_strategy_ECWIDE(int k, int g, int b);
+  std::vector<std::vector<int>> partition_strategy_ICPP23(int k, int g, int b);
+  std::vector<std::vector<int>>
+  placement_strategy_optimal_data_block_repair(int k, int g, int b);
+  void random_selection(std::vector<std::vector<int>> &partition_plan,
+                        std::vector<unsigned int> &nodes,
+                        unsigned int stripe_id);
 
   std::unique_ptr<coro_rpc::coro_rpc_server> rpc_server_{nullptr};
   EC_schema ec_schema_;

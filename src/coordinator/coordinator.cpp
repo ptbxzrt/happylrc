@@ -163,7 +163,245 @@ std::pair<std::string, int> Coordinator::get_proxy_location(std::string key,
 }
 
 void Coordinator::generate_placement_plan(std::vector<unsigned int> &nodes,
-                                          unsigned int stripe_id) {}
+                                          unsigned int stripe_id) {
+  // 我的理解，flat放置不用单独实现，在实验室限制服务器网速即可
+  // 因此这里没有实现flag放置
+
+  stripe_item &stripe = stripe_info_[stripe_id];
+  int k = stripe.k;
+  int real_l = stripe.real_l;
+  int b = stripe.b;
+  int g = stripe.g;
+  my_assert(k % real_l == 0);
+
+  if (stripe.placement_type == Placement_Type::random) {
+    std::random_device rd;
+    std::mt19937 gen(rd());
+    std::uniform_int_distribution<unsigned int> dis(0, node_info_.size() - 1);
+
+    std::vector<bool> visited_nodes(node_info_.size(), false);
+    // (某个cluster中已经包含的group编号, 某个cluster中已经存放的块数量)
+    std::vector<std::pair<std::unordered_set<int>, int>> help(
+        cluster_info_.size());
+    for (auto i = 0; i < cluster_info_.size(); i++) {
+      help[i].second = 0;
+    }
+    unsigned int node_id;
+    unsigned int cluster_id;
+    int space_upper;
+    auto find_a_node_for_a_block = [&, this]() {
+      do {
+        node_id = dis(gen);
+        cluster_id = node_info_[node_id].cluster_id;
+        space_upper = g + help[cluster_id].first.size();
+      } while (visited_nodes[node_id] == true ||
+               help[cluster_id].second == space_upper);
+
+      my_assert(help[cluster_id].second < space_upper);
+      my_assert(visited_nodes[node_id] == false);
+
+      nodes.push_back(node_id);
+      node_info_[node_id].stripe_ids.insert(stripe_id);
+      visited_nodes[node_id] = true;
+      help[cluster_id].second++;
+
+      return cluster_id;
+    };
+
+    // 数据块
+    for (int i = 0; i < real_l; i++) {
+      for (int j = 0; j < b; j++) {
+        unsigned int cluster_id = find_a_node_for_a_block();
+        help[cluster_id].first.insert(i);
+      }
+    }
+
+    // 全局校验块
+    for (int i = 0; i < g; i++) {
+      unsigned int cluster_id = find_a_node_for_a_block();
+    }
+
+    // 局部校验块
+    for (int i = 0; i < real_l; i++) {
+      unsigned int cluster_id = find_a_node_for_a_block();
+      help[cluster_id].first.insert(i);
+    }
+  } else if (stripe.placement_type == Placement_Type::strategy_ECWIDE) {
+    // partition plan的每个元素：{num of data, num of local, num of global}
+    std::vector<std::vector<int>> partition_plan =
+        partition_strategy_ECWIDE(k, g, b);
+
+    // ECWIDE没有考虑load balance，随机选择节点存放
+    random_selection(partition_plan, nodes, stripe_id);
+  } else if (stripe.placement_type ==
+             Placement_Type::strategy_ICPP23_IGNORE_LOAD) {
+    std::vector<std::vector<int>> partition_plan =
+        partition_strategy_ICPP23(k, g, b);
+
+    // 不考虑load balance，随机选择节点存放
+    random_selection(partition_plan, nodes, stripe_id);
+  } else if (stripe.placement_type ==
+             Placement_Type::strategy_ICPP23_CONSIDER_LOAD) {
+    std::vector<std::vector<int>> partition_plan =
+        partition_strategy_ICPP23(k, g, b);
+
+    // 考虑load balance
+
+  } else {
+    my_assert(false);
+  }
+}
+
+void Coordinator::random_selection(
+    std::vector<std::vector<int>> &partition_plan,
+    std::vector<unsigned int> &nodes, unsigned int stripe_id) {
+  int data_block_idx = 0;
+  int global_block_idx = stripe_info_[stripe_id].k;
+  int local_block_idx = stripe_info_[stripe_id].k + stripe_info_[stripe_id].g;
+
+  std::random_device rd_cluster;
+  std::mt19937 gen_cluster(rd_cluster());
+  std::uniform_int_distribution<unsigned int> dis_cluster(
+      0, cluster_info_.size() - 1);
+
+  std::vector<bool> visited_clusters(cluster_info_.size(), false);
+
+  for (auto i = 0; i < partition_plan.size(); i++) {
+    unsigned int cluster_id;
+    do {
+      cluster_id = dis_cluster(gen_cluster);
+    } while (visited_clusters[cluster_id] == true);
+    visited_clusters[cluster_id] = true;
+    cluster_item &cluster = cluster_info_[cluster_id];
+
+    std::random_device rd_node;
+    std::mt19937 gen_node(rd_node());
+    std::uniform_int_distribution<unsigned int> dis_node(
+        0, cluster.nodes.size() - 1);
+
+    std::vector<bool> visited_nodes(cluster.nodes.size(), false);
+
+    auto find_a_node_for_a_block = [&, this](int &block_idx) {
+      int node_idx;
+      do {
+        node_idx = dis_node(gen_node);
+      } while (visited_nodes[node_idx] == true);
+      visited_nodes[node_idx] = true;
+      nodes[block_idx++] = cluster.nodes[node_idx];
+      node_info_[cluster.nodes[node_idx]].stripe_ids.insert(stripe_id);
+    };
+
+    for (int j = 0; j < partition_plan[i][0]; j++) {
+      find_a_node_for_a_block(data_block_idx);
+    }
+
+    for (int j = 0; j < partition_plan[i][1]; j++) {
+      find_a_node_for_a_block(local_block_idx);
+    }
+
+    for (int j = 0; j < partition_plan[i][2]; j++) {
+      find_a_node_for_a_block(global_block_idx);
+    }
+  }
+}
+
+std::vector<std::vector<int>>
+Coordinator::placement_strategy_optimal_data_block_repair(int k, int g, int b) {
+  std::vector<std::vector<int>> partition_plan;
+  int real_l = k / b;
+
+  int left_data_block_in_each_group = b;
+  if (b >= g + 1) {
+    for (int i = 0; i < real_l; i++) {
+      int num_of_left_data_block_in_cur_group = b;
+      while (num_of_left_data_block_in_cur_group >= g + 1) {
+        partition_plan.push_back({g + 1, 0, 0});
+        num_of_left_data_block_in_cur_group -= (g + 1);
+      }
+      left_data_block_in_each_group = num_of_left_data_block_in_cur_group;
+    }
+  }
+
+  assert(left_data_block_in_each_group == b % (g + 1));
+
+  if (left_data_block_in_each_group == 0) {
+    partition_plan.push_back({0, real_l, 0});
+  } else {
+    int theta = g / left_data_block_in_each_group;
+    int num_of_left_group = real_l;
+    while (num_of_left_group >= theta) {
+      partition_plan.push_back(
+          {theta * left_data_block_in_each_group, theta, 0});
+      num_of_left_group -= theta;
+    }
+    if (num_of_left_group > 0) {
+      partition_plan.push_back(
+          {num_of_left_group * left_data_block_in_each_group, num_of_left_group,
+           0});
+    }
+  }
+
+  return partition_plan;
+}
+
+std::vector<std::vector<int>>
+Coordinator::partition_strategy_ECWIDE(int k, int g, int b) {
+  auto partition_plan = placement_strategy_optimal_data_block_repair(k, g, b);
+
+  // ECWIDE将全局校验块单独放到了1个cluster
+  partition_plan.push_back({0, 0, g});
+
+  return partition_plan;
+}
+
+static bool left_space_cmp(std::pair<int, int> &a, std::pair<int, int> &b) {
+  return a.second > b.second;
+}
+
+std::vector<std::vector<int>>
+Coordinator::partition_strategy_ICPP23(int k, int g, int b) {
+  auto partition_plan = placement_strategy_optimal_data_block_repair(k, g, b);
+
+  std::vector<std::pair<int, int>> space_left_in_each_partition;
+  int sum_left_space = 0;
+  // 遍历每个partition查看剩余空间
+  for (auto i = 0; i < partition_plan.size(); i++) {
+    int num_of_group = partition_plan[i][1];
+    // 若某个partition不包含局部校验块，说明这里所有块属于1个group
+    if (partition_plan[i][1] == 0) {
+      num_of_group = 1;
+    }
+    int max_space = g + num_of_group;
+    int left_space = max_space - partition_plan[i][0] - partition_plan[i][1];
+    space_left_in_each_partition.push_back({i, left_space});
+    sum_left_space += left_space;
+  }
+
+  // 用全局校验块填充剩余空间
+  int left_g = g;
+  if (sum_left_space >= g) {
+    std::sort(space_left_in_each_partition.begin(),
+              space_left_in_each_partition.end(), left_space_cmp);
+    for (auto i = 0; i < space_left_in_each_partition.size() && left_g > 0;
+         i++) {
+      if (space_left_in_each_partition[i].second > 0) {
+        int j = space_left_in_each_partition[i].first;
+        if (left_g >= space_left_in_each_partition[i].second) {
+          partition_plan[j][2] = space_left_in_each_partition[i].second;
+          left_g -= partition_plan[j][2];
+        } else {
+          partition_plan[j][2] = left_g;
+          left_g -= left_g;
+        }
+      }
+    }
+    my_assert(left_g == 0);
+  } else {
+    partition_plan.push_back({0, 0, left_g});
+  }
+
+  return partition_plan;
+}
 
 stripe_item &Coordinator::new_stripe_item(size_t block_size) {
   stripe_item temp;

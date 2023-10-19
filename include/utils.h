@@ -17,7 +17,13 @@
 
 enum class Encode_Type { Azure_LRC };
 
-enum class Placement_Type { random, flat, strategy_ECWIDE, strategy_BEST };
+enum class Placement_Type {
+  random,
+  flat,
+  strategy_ECWIDE,
+  strategy_ICPP23_IGNORE_LOAD,
+  strategy_ICPP23_CONSIDER_LOAD
+};
 
 typedef struct {
   bool partial_decoding;

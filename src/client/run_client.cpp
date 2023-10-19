@@ -32,8 +32,10 @@ int main(int argc, char **argv) {
     ec_schema.placement_type = Placement_Type::flat;
   } else if (args[2] == "strategy_ECWIDE") {
     ec_schema.placement_type = Placement_Type::strategy_ECWIDE;
-  } else if (args[2] == "strategy_BEST") {
-    ec_schema.placement_type = Placement_Type::strategy_BEST;
+  } else if (args[2] == "strategy_ICPP23_IGNORE_LOAD") {
+    ec_schema.placement_type = Placement_Type::strategy_ICPP23_IGNORE_LOAD;
+  } else if (args[2] == "strategy_ICPP23_CONSIDER_LOAD") {
+    ec_schema.placement_type = Placement_Type::strategy_ICPP23_CONSIDER_LOAD;
   } else {
     my_assert(false);
   }
