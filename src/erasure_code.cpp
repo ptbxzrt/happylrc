@@ -2,8 +2,7 @@
 #include <algorithm>
 #include <cstring>
 
-static void make_lrc_coding_matrix(int k, int g, int real_l,
-                                   int *coding_matrix) {
+void make_lrc_coding_matrix(int k, int g, int real_l, int *coding_matrix) {
   my_assert(k % real_l == 0);
   int num_of_data_block_per_group = k / real_l;
 

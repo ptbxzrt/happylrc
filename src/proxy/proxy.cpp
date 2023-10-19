@@ -249,8 +249,12 @@ void Proxy::read_from_datanode(const char *key, size_t key_len, char *value,
 }
 
 void Proxy::main_repair(main_repair_plan repair_plan) {
+  my_assert(repair_plan.failed_blocks_index.size() == 1);
+
   std::sort(repair_plan.live_blocks_index.begin(),
             repair_plan.live_blocks_index.end());
+  std::sort(repair_plan.failed_blocks_index.begin(),
+            repair_plan.failed_blocks_index.end());
 
   std::vector<std::thread> readers_inner_cluster;
   std::vector<std::thread> readers_outter_cluster;
@@ -341,13 +345,181 @@ void Proxy::main_repair(main_repair_plan repair_plan) {
     readers_inner_cluster[i].join();
   }
 
-  if (failed_block_index >= repair_plan.k &&
-      failed_block_index <= (repair_plan.k + repair_plan.g - 1)) {
-   // 修复全局校验块
-   
+  std::vector<char> repaired_block(repair_plan.block_size);
+  int k = repair_plan.k;
+  int real_l = repair_plan.real_l;
+  int b = repair_plan.b;
+  int g = repair_plan.g;
+  if (failed_block_index >= k && failed_block_index <= (k + g - 1)) {
+    // 修复全局校验块
+    // 因为只考虑单块修复，所以repair_plan.failed_blocks_index的值只可能为1
+    // 实际上，这个if语句内的代码逻辑，也适用于多块修复
+
+    // 编码矩阵“去掉”单位矩阵的部分
+    std::vector<int> matrix;
+    matrix.resize((g + real_l) * k);
+    make_lrc_coding_matrix(k, g, real_l, matrix.data());
+
+    // 完整的编码矩阵
+    std::vector<int> full_matrix((k + g + real_l) * k, 0);
+    for (int i = 0; i < (k + g + real_l); i++) {
+      if (i < k) {
+        full_matrix[i * k + i] = 1;
+      } else {
+        for (int j = 0; j < k; j++) {
+          full_matrix[i * k + j] = matrix[(i - k) * k + j];
+        }
+      }
+    }
+
+    // 由“编码矩阵中损坏块对应的行”组成的矩阵
+    std::vector<int> matrix_failed_block;
+    matrix_failed_block.resize(repair_plan.failed_blocks_index.size() * k);
+    for (auto i = 0; i < repair_plan.failed_blocks_index.size(); i++) {
+      int row = repair_plan.failed_blocks_index[i];
+      int *coff = &(full_matrix[row * k]);
+      for (int j = 0; j < k; j++) {
+        matrix_failed_block[i * k + j] = coff[j];
+      }
+    }
+
+    // 由“编码矩阵中存活块对应的行”组成的矩阵
+    std::vector<int> matrix_live_block;
+    matrix_live_block.resize(k * k);
+    for (auto i = 0; i < repair_plan.live_blocks_index.size(); i++) {
+      int row = repair_plan.live_blocks_index[i];
+      int *coff = &(full_matrix[row * k]);
+      for (int j = 0; j < k; j++) {
+        matrix_live_block[i * k + j] = coff[j];
+      }
+    }
+
+    // matrix_live_block的逆矩阵
+    std::vector<int> invert_matrix_live_block;
+    invert_matrix_live_block.resize(k * k);
+    jerasure_invert_matrix(matrix_live_block.data(),
+                           invert_matrix_live_block.data(), k, 8);
+
+    // help_matrix与存活块再做一定的计算即可修复出损坏块
+    int *help_matrix_ptr = jerasure_matrix_multiply(
+        matrix_failed_block.data(), invert_matrix_live_block.data(),
+        repair_plan.failed_blocks_index.size(), k, k, k, 8);
+    std::vector<int> help_matrix;
+    help_matrix.resize(repair_plan.failed_blocks_index.size() * k);
+    memcpy(help_matrix.data(), help_matrix_ptr,
+           help_matrix.size() * sizeof(int));
+    free(help_matrix_ptr);
+
+    for (auto &blocks_in_each_cluster : blocks) {
+      if (blocks_in_each_cluster.first == repair_plan.cluster_id) {
+        // 对从本cluster中读取的块做一个编码合并操作
+        // 这个合并操作需要用到刚才计算出来的help_matrix
+
+        std::vector<char> encode_result(repair_plan.block_size);
+        std::vector<std::pair<int, std::vector<char>>> saved_encode_result;
+        int num_of_live_blocks_in_cur_cluster =
+            blocks_in_each_cluster.second.size();
+        std::vector<char *> data_v(num_of_live_blocks_in_cur_cluster);
+        std::vector<char *> coding_v(1);
+        char **data = (char **)data_v.data();
+        char **coding = (char **)coding_v.data();
+
+        for (auto i = 0; i < repair_plan.failed_blocks_index.size(); i++) {
+          int *coff = &(help_matrix[i * k]);
+          std::vector<int> coding_matrix(1 * num_of_live_blocks_in_cur_cluster,
+                                         1);
+          int idx = 0;
+          for (auto &block : blocks_in_each_cluster.second) {
+            int coff_idx = 0;
+            for (; coff_idx < repair_plan.live_blocks_index.size();
+                 coff_idx++) {
+              if (repair_plan.live_blocks_index[coff_idx] == block.first) {
+                break;
+              }
+            }
+            coding_matrix[idx] = coff[coff_idx];
+            data[idx] = block.second.data();
+            idx++;
+          }
+
+          int sum = 0;
+          for (auto &num : coding_matrix) {
+            sum += num;
+          }
+
+          coding[0] = encode_result.data();
+          jerasure_matrix_encode(num_of_live_blocks_in_cur_cluster, 1, 8,
+                                 coding_matrix.data(), data, coding,
+                                 repair_plan.block_size);
+
+          // 这里之所以这样做一个判断，是因为当编码矩阵的元素为0时，Jerasure会立即返回，不做任何计算
+          // 但我们则希望编码结果能正常输出1个全0矩阵
+          if (sum == 0) {
+            encode_result = std::vector<char>(repair_plan.block_size, 0);
+          }
+
+          saved_encode_result.push_back(
+              {repair_plan.failed_blocks_index[i], encode_result});
+        }
+        blocks_in_each_cluster.second.clear();
+        for (auto &encode_result : saved_encode_result) {
+          blocks_in_each_cluster.second[encode_result.first] =
+              encode_result.second;
+        }
+      }
+    }
+
+    for (auto i = 0; i < repair_plan.failed_blocks_index.size(); i++) {
+      int num_of_clusters_involved = blocks.size();
+      std::vector<char *> data_v(num_of_clusters_involved);
+      std::vector<char *> coding_v(1);
+      char **data = (char **)data_v.data();
+      char **coding = (char **)coding_v.data();
+      int idx = 0;
+      for (auto &blocks_in_each_cluster : blocks) {
+        data[idx++] =
+            blocks_in_each_cluster.second[repair_plan.failed_blocks_index[i]]
+                .data();
+      }
+      coding[0] = repaired_block.data();
+      std::vector<int> new_matrix(1 * num_of_clusters_involved, 1);
+      jerasure_matrix_encode(num_of_clusters_involved, 1, 8, new_matrix.data(),
+                             data, coding, repair_plan.block_size);
+    }
   } else {
-// 修复数据块或局部校验块
+    // 修复数据块或局部校验块
+    // 直接异或合并即可
+
+    int num_of_blocks_involved = 0;
+    for (auto &blocks_in_each_cluster : blocks) {
+      num_of_blocks_involved += blocks_in_each_cluster.second.size();
+    }
+
+    std::vector<char *> data_v(num_of_blocks_involved);
+    std::vector<char *> coding_v(1);
+    char **data = (char **)data_v.data();
+    char **coding = (char **)coding_v.data();
+
+    int idx = 0;
+    for (auto &num_of_blocks_involved : blocks) {
+      for (auto &block : num_of_blocks_involved.second) {
+        data[idx++] = block.second.data();
+      }
+    }
+    coding[0] = repaired_block.data();
+    std::vector<int> new_matrix(1 * num_of_blocks_involved, 1);
+
+    jerasure_matrix_encode(num_of_blocks_involved, 1, 8, new_matrix.data(),
+                           data, coding, repair_plan.block_size);
   }
+
+  my_assert(repair_plan.new_locations.size() == 1);
+  std::string ip = repair_plan.new_locations[0].first.first;
+  int port = repair_plan.new_locations[0].first.second;
+  std::string key = std::to_string(repair_plan.stripe_id * 1000 +
+                                   repair_plan.failed_blocks_index[0]);
+  write_to_datanode(key.data(), key.size(), repaired_block.data(),
+                    repaired_block.size(), ip.c_str(), port);
 }
 
 void Proxy::help_repair(help_repair_plan repair_plan) {}
