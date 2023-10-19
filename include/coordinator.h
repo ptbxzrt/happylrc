@@ -47,9 +47,17 @@ private:
   std::vector<std::vector<int>> partition_strategy_ICPP23(int k, int g, int b);
   std::vector<std::vector<int>>
   placement_strategy_optimal_data_block_repair(int k, int g, int b);
-  void random_selection(std::vector<std::vector<int>> &partition_plan,
+  void select_by_random(std::vector<std::vector<int>> &partition_plan,
                         std::vector<unsigned int> &nodes,
                         unsigned int stripe_id);
+  void select_by_load(std::vector<std::vector<int>> &partition_plan,
+                      std::vector<unsigned int> &nodes, unsigned int stripe_id);
+  void compute_avg_cost_for_each_node_and_cluster(
+      double &node_avg_storage_cost, double &node_avg_network_cost,
+      double &cluster_avg_storage_cost, double &cluster_avg_network_cost);
+  void compute_total_cost_for_cluster(cluster_item &cluster,
+                                      double &storage_cost,
+                                      double &network_cost);
 
   std::unique_ptr<coro_rpc::coro_rpc_server> rpc_server_{nullptr};
   EC_schema ec_schema_;
@@ -70,4 +78,5 @@ private:
   std::string ip_;
   int port_;
   std::string config_file_path_;
+  double alpha_;
 };

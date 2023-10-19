@@ -59,6 +59,11 @@ typedef struct {
   std::string ip;
   int port;
   std::unordered_set<unsigned int> stripe_ids;
+
+  double storage_cost;
+  double network_cost;
+  double bandwidth;
+  double storage;
 } node_item;
 
 typedef struct {

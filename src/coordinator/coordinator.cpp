@@ -4,7 +4,7 @@
 std::string Coordinator::echo(std::string s) { return s + "zhaohao"; }
 
 Coordinator::Coordinator(std::string ip, int port, std::string config_file_path)
-    : ip_(ip), port_(port), config_file_path_(config_file_path) {
+    : ip_(ip), port_(port), config_file_path_(config_file_path), alpha_(0.5) {
   rpc_server_ = std::make_unique<coro_rpc::coro_rpc_server>(1, port_);
   rpc_server_->register_handler<&Coordinator::set_erasure_coding_parameters>(
       this);
@@ -162,6 +162,16 @@ std::pair<std::string, int> Coordinator::get_proxy_location(std::string key,
   return proxy_location;
 }
 
+static bool cmp_prediction_cost(std::pair<std::vector<int>, double> &a,
+                                std::pair<std::vector<int>, double> &b) {
+  return a.second > b.second;
+}
+
+static bool cmp_combined_cost(std::pair<unsigned int, double> &a,
+                              std::pair<unsigned int, double> &b) {
+  return a.second < b.second;
+}
+
 void Coordinator::generate_placement_plan(std::vector<unsigned int> &nodes,
                                           unsigned int stripe_id) {
   // 我的理解，flat放置不用单独实现，在实验室限制服务器网速即可
@@ -232,27 +242,164 @@ void Coordinator::generate_placement_plan(std::vector<unsigned int> &nodes,
         partition_strategy_ECWIDE(k, g, b);
 
     // ECWIDE没有考虑load balance，随机选择节点存放
-    random_selection(partition_plan, nodes, stripe_id);
+    select_by_random(partition_plan, nodes, stripe_id);
   } else if (stripe.placement_type ==
              Placement_Type::strategy_ICPP23_IGNORE_LOAD) {
     std::vector<std::vector<int>> partition_plan =
         partition_strategy_ICPP23(k, g, b);
 
     // 不考虑load balance，随机选择节点存放
-    random_selection(partition_plan, nodes, stripe_id);
+    select_by_random(partition_plan, nodes, stripe_id);
   } else if (stripe.placement_type ==
              Placement_Type::strategy_ICPP23_CONSIDER_LOAD) {
     std::vector<std::vector<int>> partition_plan =
         partition_strategy_ICPP23(k, g, b);
 
     // 考虑load balance
-
+    select_by_load(partition_plan, nodes, stripe_id);
   } else {
     my_assert(false);
   }
 }
 
-void Coordinator::random_selection(
+void Coordinator::select_by_load(std::vector<std::vector<int>> &partition_plan,
+                                 std::vector<unsigned int> &nodes,
+                                 unsigned int stripe_id) {
+  std::vector<double> num_of_blocks_each_par;
+  std::vector<double> num_of_data_blocks_each_par;
+  for (auto &partition : partition_plan) {
+    num_of_blocks_each_par.push_back(partition[0] + partition[1] +
+                                     partition[2]);
+    num_of_data_blocks_each_par.push_back(partition[0]);
+  }
+
+  double avg_blocks = 0;
+  double avg_data_blocks = 0;
+  for (auto i = 0; i < partition_plan.size(); i++) {
+    avg_blocks += num_of_blocks_each_par[i];
+    avg_data_blocks += num_of_data_blocks_each_par[i];
+  }
+  avg_blocks = avg_blocks / (double)num_of_blocks_each_par.size();
+  avg_data_blocks =
+      avg_data_blocks / (double)num_of_data_blocks_each_par.size();
+
+  std::vector<std::pair<std::vector<int>, double>> prediction_cost_each_par;
+  for (auto i = 0; i < partition_plan.size(); i++) {
+    double storage_cost = num_of_blocks_each_par[i] / avg_blocks;
+    double network_cost = num_of_data_blocks_each_par[i] / avg_data_blocks;
+    double prediction_cost =
+        storage_cost * (1 - alpha_) + network_cost * alpha_;
+    prediction_cost_each_par.push_back({partition_plan[i], prediction_cost});
+  }
+  // 将partition按预计开销降序排列
+  std::sort(prediction_cost_each_par.begin(), prediction_cost_each_par.end(),
+            cmp_prediction_cost);
+  partition_plan.clear();
+  for (auto &partition : prediction_cost_each_par) {
+    partition_plan.push_back(partition.first);
+  }
+
+  int data_block_idx = 0;
+  int global_block_idx = stripe_info_[stripe_id].k;
+  int local_block_idx = stripe_info_[stripe_id].k + stripe_info_[stripe_id].g;
+
+  double node_avg_storage_cost, node_avg_network_cost;
+  double cluster_avg_storage_cost, cluster_avg_network_cost;
+  compute_avg_cost_for_each_node_and_cluster(
+      node_avg_storage_cost, node_avg_network_cost, cluster_avg_storage_cost,
+      cluster_avg_network_cost);
+
+  std::vector<std::pair<unsigned int, double>> sorted_clusters;
+  for (auto &cluster : cluster_info_) {
+    double cluster_storage_cost, cluster_network_cost;
+    compute_total_cost_for_cluster(cluster.second, cluster_storage_cost,
+                                   cluster_network_cost);
+    double combined_cost =
+        (cluster_storage_cost / cluster_avg_storage_cost) * (1 - alpha_) +
+        (cluster_network_cost / cluster_avg_network_cost) * alpha_;
+    sorted_clusters.push_back({cluster.first, combined_cost});
+  }
+  std::sort(sorted_clusters.begin(), sorted_clusters.end(), cmp_combined_cost);
+
+  int cluster_idx = 0;
+  for (auto i = 0; i < partition_plan.size(); i++) {
+    cluster_item &cluster = cluster_info_[sorted_clusters[cluster_idx++].first];
+
+    std::vector<std::pair<unsigned int, double>> sorted_nodes_in_each_cluster;
+    for (auto &node_id : cluster.nodes) {
+      node_item &node = node_info_[node_id];
+      double node_storage_cost = node.storage_cost / node.storage;
+      double node_network_cost = node.network_cost / node.bandwidth;
+      double combined_cost =
+          (node_storage_cost / node_avg_storage_cost) * (1 - alpha_) +
+          (node_network_cost / node_avg_network_cost) * alpha_;
+      sorted_nodes_in_each_cluster.push_back({node_id, combined_cost});
+    }
+    std::sort(sorted_nodes_in_each_cluster.begin(),
+              sorted_nodes_in_each_cluster.end(), cmp_combined_cost);
+
+    int node_idx = 0;
+    // data
+    for (int j = 0; j < partition_plan[i][0]; j++) {
+      int node_id = sorted_nodes_in_each_cluster[node_idx++].first;
+      nodes[data_block_idx++] = node_id;
+      node_info_[node_id].stripe_ids.insert(stripe_id);
+    }
+    // local
+    for (int j = 0; j < partition_plan[i][1]; j++) {
+      int node_id = sorted_nodes_in_each_cluster[node_idx++].first;
+      nodes[local_block_idx++] = node_id;
+      node_info_[node_id].stripe_ids.insert(stripe_id);
+    }
+    // global
+    for (int j = 0; j < partition_plan[i][2]; j++) {
+      int node_id = sorted_nodes_in_each_cluster[node_idx++].first;
+      nodes[global_block_idx++] = node_id;
+      node_info_[node_id].stripe_ids.insert(stripe_id);
+    }
+  }
+}
+
+void Coordinator::compute_avg_cost_for_each_node_and_cluster(
+    double &node_avg_storage_cost, double &node_avg_network_cost,
+    double &cluster_avg_storage_cost, double &cluster_avg_network_cost) {
+  for (auto &node : node_info_) {
+    double storage_cost = node.second.storage_cost / node.second.storage;
+    double network_cost = node.second.network_cost / node.second.bandwidth;
+    node_avg_storage_cost += storage_cost;
+    node_avg_network_cost += network_cost;
+  }
+  node_avg_storage_cost /= (double)node_info_.size();
+  node_avg_network_cost /= (double)node_info_.size();
+
+  for (auto &cluster : cluster_info_) {
+    double storage_cost = 0, network_cost = 0;
+    compute_total_cost_for_cluster(cluster.second, storage_cost, network_cost);
+    cluster_avg_storage_cost += storage_cost;
+    cluster_avg_network_cost += network_cost;
+  }
+  cluster_avg_storage_cost /= (double)cluster_info_.size();
+  cluster_avg_network_cost /= (double)cluster_info_.size();
+}
+
+void Coordinator::compute_total_cost_for_cluster(cluster_item &cluster,
+                                                 double &storage_cost,
+                                                 double &network_cost) {
+  double all_storage = 0, all_bandwidth = 0;
+  double all_storage_cost = 0, all_network_cost = 0;
+  for (auto i = 0; i < cluster.nodes.size(); i++) {
+    unsigned int node_id = cluster.nodes[i];
+    node_item &node = node_info_[node_id];
+    all_storage += node.storage;
+    all_bandwidth += node.bandwidth;
+    all_storage_cost += node.storage_cost;
+    all_network_cost += node.network_cost;
+  }
+  storage_cost = all_storage_cost / all_storage;
+  network_cost = all_network_cost / all_bandwidth;
+}
+
+void Coordinator::select_by_random(
     std::vector<std::vector<int>> &partition_plan,
     std::vector<unsigned int> &nodes, unsigned int stripe_id) {
   int data_block_idx = 0;
@@ -284,6 +431,8 @@ void Coordinator::random_selection(
     auto find_a_node_for_a_block = [&, this](int &block_idx) {
       int node_idx;
       do {
+        // 注意，此处是node_idx，而非node_id
+        // cluster.nodes[node_idx]才是node_id
         node_idx = dis_node(gen_node);
       } while (visited_nodes[node_idx] == true);
       visited_nodes[node_idx] = true;
