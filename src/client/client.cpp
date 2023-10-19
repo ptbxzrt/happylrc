@@ -12,6 +12,8 @@ Client::Client(std::string ip, int port, std::string coordinator_ip,
       coordinator_ip_, std::to_string(coordinator_port_)));
 }
 
+Client::~Client() { acceptor_.close(); }
+
 void Client::set_ec_parameter(EC_schema ec_schema) {
   auto r = async_simple::coro::syncAwait(
       rpc_coordinator_->call<&Coordinator::set_erasure_coding_parameters>(

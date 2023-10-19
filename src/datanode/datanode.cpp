@@ -10,6 +10,8 @@ Datanode::Datanode(std::string ip, int port)
   redis_ = std::make_unique<sw::redis::Redis>(url);
 }
 
+Datanode::~Datanode() { acceptor_.close(); }
+
 void Datanode::keep_working() {
   for (;;) {
     asio::ip::tcp::socket peer(io_context_);

@@ -8,6 +8,7 @@
 class Datanode {
 public:
   Datanode(std::string ip, int port);
+  ~Datanode();
   void keep_working();
 
 private:

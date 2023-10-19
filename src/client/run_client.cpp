@@ -16,7 +16,9 @@ int main(int argc, char **argv) {
 
   EC_schema ec_schema;
 
-  ec_schema.partial_decoding = (args[0] == "true");
+  // partial_decoding始终为true
+  // 内部暂未实现“非partial_decoding”的修复流程
+  ec_schema.partial_decoding = true;
 
   if (args[1] == "Azure_LRC") {
     ec_schema.encode_type = Encode_Type::Azure_LRC;

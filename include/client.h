@@ -9,6 +9,7 @@ class Client {
 public:
   Client(std::string ip, int port, std::string coordinator_ip,
          int coordinator_port);
+  ~Client();
 
   void set_ec_parameter(EC_schema ec_schema);
 

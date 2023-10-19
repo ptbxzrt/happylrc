@@ -57,7 +57,7 @@ private:
   std::condition_variable cv_;
   unsigned int next_stripe_id_{0};
   // proxy用于rpc的port是port + 1
-  // 这里的key是port，但在connect时需要用port + 1进行connect
+  // 这里的key是port + 1，因为在connect时需要用port + 1进行connect
   std::unordered_map<std::string, std::unique_ptr<coro_rpc::coro_rpc_client>>
       proxys_;
   std::string ip_;

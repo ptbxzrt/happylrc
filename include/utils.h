@@ -79,6 +79,44 @@ typedef struct {
   int client_port;
 } placement_info;
 
+typedef struct {
+  unsigned int cluster_id;
+  int k;
+  int real_l;
+  int g;
+  int b;
+  size_t block_size;
+  unsigned int stripe_id;
+  Encode_Type encode_type;
+  bool partial_decoding;
+  bool multi_clusters_involved;
+  std::vector<std::pair<std::pair<std::string, int>, int>>
+      inner_cluster_help_blocks_info;
+  std::vector<int> live_blocks_index;
+  std::vector<int> failed_blocks_index;
+  std::vector<std::pair<std::pair<std::string, int>, int>> new_locations;
+  std::vector<unsigned int> help_cluster_ids;
+} main_repair_plan;
+
+typedef struct {
+  unsigned int cluster_id;
+  int k;
+  int real_l;
+  int g;
+  int b;
+  size_t block_size;
+  unsigned int stripe_id;
+  Encode_Type encode_type;
+  bool partial_decoding;
+  bool multi_clusters_involved;
+  std::vector<std::pair<std::pair<std::string, int>, int>>
+      inner_cluster_help_blocks_info;
+  std::vector<int> live_blocks_index;
+  std::vector<int> failed_blocks_index;
+  std::string proxy_ip;
+  int proxy_port;
+} help_repair_plan;
+
 // 生成随机字符串
 std::string generate_random_string(int length);
 

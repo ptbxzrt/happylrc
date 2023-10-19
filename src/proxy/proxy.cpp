@@ -15,16 +15,22 @@ Proxy::Proxy(std::string ip, int port, std::string coordinator_ip,
   rpc_server_ = std::make_unique<coro_rpc::coro_rpc_server>(1, port_for_rpc_);
   rpc_server_->register_handler<&Proxy::start_encode_and_store_object>(this);
   rpc_server_->register_handler<&Proxy::decode_and_transfer_data>(this);
+  rpc_server_->register_handler<&Proxy::main_repair>(this);
+  rpc_server_->register_handler<&Proxy::help_repair>(this);
 
   rpc_coordinator_ = std::make_unique<coro_rpc::coro_rpc_client>();
   async_simple::coro::syncAwait(rpc_coordinator_->connect(
       coordinator_ip_, std::to_string(coordinator_port_)));
 }
 
-Proxy::~Proxy() { rpc_server_->stop(); }
+Proxy::~Proxy() {
+  acceptor_.close();
+  rpc_server_->stop();
+}
 
 void Proxy::start() { auto err = rpc_server_->start(); }
 
+// 非阻塞的，会立即返回
 void Proxy::start_encode_and_store_object(placement_info placement) {
   auto encode_and_store = [this, placement]() {
     asio::ip::tcp::socket peer(io_context_);
@@ -89,21 +95,21 @@ void Proxy::start_encode_and_store_object(placement_info placement) {
             std::to_string(placement.stripe_ids[i] * 1000 + j);
         std::pair<std::string, int> ip_and_port_of_datanode =
             placement.datanode_ip_port[i * num_of_blocks_each_stripe + j];
-        writers.push_back(std::thread([this, j, k, block_id, data, coding,
-                                       cur_block_size,
-                                       ip_and_port_of_datanode]() {
-          if (j < k) {
-            write_to_redis_or_memcached(block_id.c_str(), block_id.size(),
-                                        data[j], cur_block_size,
-                                        ip_and_port_of_datanode.first.c_str(),
-                                        ip_and_port_of_datanode.second);
-          } else {
-            write_to_redis_or_memcached(block_id.c_str(), block_id.size(),
-                                        coding[j - k], cur_block_size,
-                                        ip_and_port_of_datanode.first.c_str(),
-                                        ip_and_port_of_datanode.second);
-          }
-        }));
+        writers.push_back(
+            std::thread([this, j, k, block_id, data, coding, cur_block_size,
+                         ip_and_port_of_datanode]() {
+              if (j < k) {
+                write_to_datanode(block_id.c_str(), block_id.size(), data[j],
+                                  cur_block_size,
+                                  ip_and_port_of_datanode.first.c_str(),
+                                  ip_and_port_of_datanode.second);
+              } else {
+                write_to_datanode(block_id.c_str(), block_id.size(),
+                                  coding[j - k], cur_block_size,
+                                  ip_and_port_of_datanode.first.c_str(),
+                                  ip_and_port_of_datanode.second);
+              }
+            }));
       }
       for (auto j = 0; j < writers.size(); j++) {
         writers[j].join();
@@ -120,6 +126,7 @@ void Proxy::start_encode_and_store_object(placement_info placement) {
   new_thread.detach();
 }
 
+// 非阻塞的，会立即返回
 void Proxy::decode_and_transfer_data(placement_info placement) {
   auto decode_and_transfer = [this, placement]() {
     std::string object_value;
@@ -145,22 +152,22 @@ void Proxy::decode_and_transfer_data(placement_info placement) {
       for (int j = 0; j < num_of_datanodes_involved; j++) {
         std::pair<std::string, int> ip_and_port_of_datanode =
             placement.datanode_ip_port[i * num_of_blocks_each_stripe + j];
-        readers.push_back(std::thread([this, j, stripe_id, blocks_ptr,
-                                       cur_block_size,
-                                       ip_and_port_of_datanode]() {
-          std::string block_id = std::to_string(stripe_id * 1000 + j);
-          std::string block(cur_block_size, 0);
-          read_from_redis_or_memcached(block_id.c_str(), block_id.size(),
-                                       block.data(), cur_block_size,
-                                       ip_and_port_of_datanode.first.c_str(),
-                                       ip_and_port_of_datanode.second);
+        readers.push_back(
+            std::thread([this, j, stripe_id, blocks_ptr, cur_block_size,
+                         ip_and_port_of_datanode]() {
+              std::string block_id = std::to_string(stripe_id * 1000 + j);
+              std::string block(cur_block_size, 0);
+              read_from_datanode(block_id.c_str(), block_id.size(),
+                                 block.data(), cur_block_size,
+                                 ip_and_port_of_datanode.first.c_str(),
+                                 ip_and_port_of_datanode.second);
 
-          mutex_.lock();
+              mutex_.lock();
 
-          (*blocks_ptr)[j] = block;
+              (*blocks_ptr)[j] = block;
 
-          mutex_.unlock();
-        }));
+              mutex_.unlock();
+            }));
       }
       for (auto j = 0; j < readers.size(); j++) {
         readers[j].join();
@@ -190,9 +197,9 @@ void Proxy::decode_and_transfer_data(placement_info placement) {
   new_thread.detach();
 }
 
-void Proxy::write_to_redis_or_memcached(const char *key, size_t key_len,
-                                        const char *value, size_t value_len,
-                                        const char *ip, int port) {
+void Proxy::write_to_datanode(const char *key, size_t key_len,
+                              const char *value, size_t value_len,
+                              const char *ip, int port) {
   asio::ip::tcp::socket peer(io_context_);
   asio::ip::tcp::endpoint endpoint(asio::ip::make_address(ip), port);
   peer.connect(endpoint);
@@ -218,9 +225,8 @@ void Proxy::write_to_redis_or_memcached(const char *key, size_t key_len,
   peer.close(ignore_ec);
 }
 
-void Proxy::read_from_redis_or_memcached(const char *key, size_t key_len,
-                                         char *value, size_t value_len,
-                                         const char *ip, int port) {
+void Proxy::read_from_datanode(const char *key, size_t key_len, char *value,
+                               size_t value_len, const char *ip, int port) {
   asio::ip::tcp::socket peer(io_context_);
   asio::ip::tcp::endpoint endpoint(asio::ip::make_address(ip), port);
   peer.connect(endpoint);
@@ -241,3 +247,107 @@ void Proxy::read_from_redis_or_memcached(const char *key, size_t key_len,
   peer.shutdown(asio::ip::tcp::socket::shutdown_both, ignore_ec);
   peer.close(ignore_ec);
 }
+
+void Proxy::main_repair(main_repair_plan repair_plan) {
+  std::sort(repair_plan.live_blocks_index.begin(),
+            repair_plan.live_blocks_index.end());
+
+  std::vector<std::thread> readers_inner_cluster;
+  std::vector<std::thread> readers_outter_cluster;
+
+  int failed_block_index = repair_plan.failed_blocks_index[0];
+
+  // key: cluster_id
+  // value：<block_index, block_data>
+  std::unordered_map<unsigned int, std::unordered_map<int, std::vector<char>>>
+      blocks;
+
+  for (auto i = 0; i < repair_plan.help_cluster_ids.size(); i++) {
+    readers_outter_cluster.push_back(std::thread([&, this]() {
+      mutex_.lock();
+      asio::ip::tcp::socket peer(io_context_);
+      acceptor_.accept(peer);
+      mutex_.unlock();
+
+      // 读取help cluster id，
+      std::vector<unsigned char> cluster_id_buf(sizeof(int));
+      asio::read(peer, asio::buffer(cluster_id_buf, cluster_id_buf.size()));
+      int help_cluster_id = bytes_to_int(cluster_id_buf);
+
+      if (failed_block_index >= repair_plan.k &&
+          failed_block_index <= (repair_plan.k + repair_plan.g - 1)) {
+        // 损坏的是全局校验块
+        // 此时partial decoding修复操作需要一些较复杂的矩阵运算
+
+        // 读即将传输的block数量
+        std::vector<unsigned char> num_of_blocks_buf(sizeof(int));
+        asio::read(peer,
+                   asio::buffer(num_of_blocks_buf, num_of_blocks_buf.size()));
+        int num_of_blocks = bytes_to_int(num_of_blocks_buf);
+
+        // 实际上这里的num_of_blocks只可能是1，因为目前只考虑和实现单块修复流程
+        // 读每个block的block index及数据
+        for (int j = 0; j < num_of_blocks; j++) {
+          std::vector<unsigned char> block_index_buf(sizeof(int));
+          asio::read(peer,
+                     asio::buffer(block_index_buf, block_index_buf.size()));
+          int block_index = bytes_to_int(block_index_buf);
+
+          std::vector<char> block_buf(repair_plan.block_size);
+          asio::read(peer, asio::buffer(block_buf, block_buf.size()));
+
+          mutex_.lock();
+          blocks[help_cluster_id][block_index] = block_buf;
+          mutex_.unlock();
+        }
+      } else {
+        // 损坏的是数据块或局部校验块
+        // 存活块直接异或合并即可
+
+        std::vector<char> block_buf(repair_plan.block_size);
+        asio::read(peer, asio::buffer(block_buf, block_buf.size()));
+        mutex_.lock();
+        blocks[help_cluster_id][-1] = block_buf;
+        mutex_.unlock();
+      }
+
+      asio::error_code ignore_ec;
+      peer.shutdown(asio::ip::tcp::socket::shutdown_both, ignore_ec);
+      peer.close(ignore_ec);
+    }));
+  }
+  for (auto i = 0; i < readers_outter_cluster.size(); i++) {
+    readers_outter_cluster[i].join();
+  }
+
+  for (auto i = 0; i < repair_plan.inner_cluster_help_blocks_info.size(); i++) {
+    readers_inner_cluster.push_back(std::thread([&, this, i]() {
+      std::string &ip =
+          repair_plan.inner_cluster_help_blocks_info[i].first.first;
+      int port = repair_plan.inner_cluster_help_blocks_info[i].first.second;
+      int block_index = repair_plan.inner_cluster_help_blocks_info[i].second;
+      std::vector<char> block_buf(repair_plan.block_size);
+      std::string block_id =
+          std::to_string(repair_plan.stripe_id * 1000 + block_index);
+      size_t temp_size;
+      read_from_datanode(block_id.c_str(), block_id.size(), block_buf.data(),
+                         repair_plan.block_size, ip.c_str(), port);
+      mutex_.lock();
+      blocks[repair_plan.cluster_id][block_index] = block_buf;
+      mutex_.unlock();
+    }));
+  }
+  for (auto i = 0; i < readers_inner_cluster.size(); i++) {
+    readers_inner_cluster[i].join();
+  }
+
+  if (failed_block_index >= repair_plan.k &&
+      failed_block_index <= (repair_plan.k + repair_plan.g - 1)) {
+   // 修复全局校验块
+   
+  } else {
+// 修复数据块或局部校验块
+  }
+}
+
+void Proxy::help_repair(help_repair_plan repair_plan) {}

@@ -58,6 +58,7 @@ void Coordinator::init_cluster_info() {
 
 void Coordinator::init_proxy_info() {
   for (auto cur = cluster_info_.begin(); cur != cluster_info_.end(); cur++) {
+    // 注意加1
     connect_to_proxy(cur->second.proxy_ip, cur->second.proxy_port + 1);
   }
 }
@@ -321,7 +322,98 @@ void Coordinator::do_repair(unsigned int stripe_id,
                        blocks_to_read_in_each_cluster, repair_span_cluster,
                        new_locations_with_block_index);
 
-  
+  my_assert(repair_span_cluster.size() > 0);
+  unsigned int main_cluster_id = repair_span_cluster[0];
+
+  std::vector<std::thread> repairers;
+  for (auto i = 0; i < repair_span_cluster.size(); i++) {
+    if (i == 0) {
+      // main cluster
+      my_assert(repair_span_cluster[i] == main_cluster_id);
+      repairers.push_back(std::thread([&, this, i, main_cluster_id] {
+        stripe_item &stripe = stripe_info_[stripe_id];
+        main_repair_plan repair_plan;
+        repair_plan.k = stripe.k;
+        repair_plan.real_l = stripe.real_l;
+        repair_plan.g = stripe.g;
+        repair_plan.b = stripe.b;
+        repair_plan.encode_type = stripe.encode_type;
+        repair_plan.partial_decoding = ec_schema_.partial_decoding;
+        repair_plan.multi_clusters_involved = (repair_span_cluster.size() > 1);
+        repair_plan.block_size = stripe.block_size;
+        repair_plan.stripe_id = stripe.stripe_id;
+        repair_plan.cluster_id = main_cluster_id;
+
+        repair_plan.inner_cluster_help_blocks_info =
+            blocks_to_read_in_each_cluster[0];
+        for (auto j = 0; j < blocks_to_read_in_each_cluster.size(); j++) {
+          for (auto t = 0; t < blocks_to_read_in_each_cluster[j].size(); t++) {
+            repair_plan.live_blocks_index.push_back(
+                blocks_to_read_in_each_cluster[j][t].second);
+          }
+        }
+        repair_plan.failed_blocks_index = failed_block_indexes;
+
+        my_assert(new_locations_with_block_index.size() == 1);
+        node_item &node = node_info_[new_locations_with_block_index[0].first];
+        repair_plan.new_locations.push_back(
+            {{node.ip, node.port}, new_locations_with_block_index[0].second});
+
+        for (auto cluster_id : repair_span_cluster) {
+          if (cluster_id != main_cluster_id) {
+            repair_plan.help_cluster_ids.push_back(cluster_id);
+          }
+        }
+
+        std::string proxy_ip = cluster_info_[main_cluster_id].proxy_ip;
+        int port = cluster_info_[main_cluster_id].proxy_port;
+        // 注意port + 1
+        async_simple::coro::syncAwait(
+            proxys_[proxy_ip + std::to_string(port + 1)]
+                ->call<&Proxy::main_repair>(repair_plan));
+      }));
+    } else {
+      // help cluster
+      unsigned cluster_id = repair_span_cluster[i];
+      repairers.push_back(std::thread([&, this, i, cluster_id]() {
+        stripe_item &stripe = stripe_info_[stripe_id];
+        help_repair_plan repair_plan;
+        repair_plan.k = stripe.k;
+        repair_plan.real_l = stripe.real_l;
+        repair_plan.g = stripe.g;
+        repair_plan.b = stripe.b;
+        repair_plan.encode_type = stripe.encode_type;
+        repair_plan.partial_decoding = ec_schema_.partial_decoding;
+        repair_plan.multi_clusters_involved = (repair_span_cluster.size() > 1);
+        repair_plan.block_size = stripe.block_size;
+        repair_plan.stripe_id = stripe.stripe_id;
+        repair_plan.cluster_id = cluster_id;
+
+        repair_plan.inner_cluster_help_blocks_info =
+            blocks_to_read_in_each_cluster[i];
+        for (auto j = 0; j < blocks_to_read_in_each_cluster.size(); j++) {
+          for (auto t = 0; t < blocks_to_read_in_each_cluster[j].size(); t++) {
+            repair_plan.live_blocks_index.push_back(
+                blocks_to_read_in_each_cluster[j][t].second);
+          }
+        }
+        repair_plan.failed_blocks_index = failed_block_indexes;
+
+        repair_plan.proxy_ip = cluster_info_[cluster_id].proxy_ip;
+        repair_plan.proxy_port = cluster_info_[cluster_id].proxy_port;
+        // 注意port + 1
+        async_simple::coro::syncAwait(
+            proxys_[repair_plan.proxy_ip +
+                    std::to_string(repair_plan.proxy_port + 1)]
+                ->call<&Proxy::help_repair>(repair_plan));
+      }));
+    }
+    for (auto i = 0; i < repairers.size(); i++) {
+      repairers[i].join();
+    }
+  }
+  // stripe_info_[stripe_id].nodes[new_locations_with_block_index[0].second] =
+  //     new_locations_with_block_index[0].first;
 }
 
 static bool cmp_num_live_blocks(std::pair<unsigned int, std::vector<int>> &a,
