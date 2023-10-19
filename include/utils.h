@@ -52,6 +52,7 @@ typedef struct {
   unsigned int cluster_id;
   std::string ip;
   int port;
+  std::unordered_set<unsigned int> stripe_ids;
 } node_item;
 
 typedef struct {

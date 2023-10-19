@@ -10,11 +10,11 @@ public:
   Client(std::string ip, int port, std::string coordinator_ip,
          int coordinator_port);
 
-  std::unique_ptr<coro_rpc::coro_rpc_client> &get_rpc_client();
   void set_ec_parameter(EC_schema ec_schema);
 
   void set(std::string key, std::string value);
   std::string get(std::string key);
+  void repair(std::vector<unsigned int> failed_node_ids);
 
 private:
   std::unique_ptr<coro_rpc::coro_rpc_client> rpc_coordinator_{nullptr};

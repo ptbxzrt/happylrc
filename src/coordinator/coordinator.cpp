@@ -12,6 +12,7 @@ Coordinator::Coordinator(std::string ip, int port, std::string config_file_path)
   rpc_server_->register_handler<&Coordinator::ask_for_data>(this);
   rpc_server_->register_handler<&Coordinator::echo>(this);
   rpc_server_->register_handler<&Coordinator::commit_object>(this);
+  rpc_server_->register_handler<&Coordinator::ask_for_repair>(this);
 
   init_cluster_info();
   init_proxy_info();
@@ -57,7 +58,7 @@ void Coordinator::init_cluster_info() {
 
 void Coordinator::init_proxy_info() {
   for (auto cur = cluster_info_.begin(); cur != cluster_info_.end(); cur++) {
-    connect_to_proxy(cur->second.proxy_ip, cur->second.proxy_port);
+    connect_to_proxy(cur->second.proxy_ip, cur->second.proxy_port + 1);
   }
 }
 
@@ -273,4 +274,207 @@ size_t Coordinator::ask_for_data(std::string key, std::string client_ip,
       proxys_[location]->call<&Proxy::decode_and_transfer_data>(placement));
 
   return object.value_len;
+}
+
+void Coordinator::ask_for_repair(std::vector<unsigned int> failed_node_ids) {
+  // 目前仅实现了single node repair
+  my_assert(failed_node_ids.size() == 1);
+
+  // 找到所有数据损坏的条带
+  std::unordered_set<unsigned int> failed_stripe_ids;
+  for (auto node_id : failed_node_ids) {
+    for (auto stripe_id : node_info_[node_id].stripe_ids) {
+      failed_stripe_ids.insert(stripe_id);
+    }
+  }
+
+  for (auto stripe_id : failed_stripe_ids) {
+    // 找到条带内的哪一个block损坏了
+    std::vector<int> failed_block_indexes;
+    for (auto i = 0; i < stripe_info_[stripe_id].nodes.size(); i++) {
+      if (stripe_info_[stripe_id].nodes[i] == failed_node_ids[0]) {
+        failed_block_indexes.push_back(i);
+      }
+    }
+    my_assert(failed_block_indexes.size() == 1);
+
+    if (stripe_info_[stripe_id].encode_type == Encode_Type::Azure_LRC) {
+      do_repair(stripe_id, {failed_block_indexes[0]});
+    }
+  }
+}
+
+void Coordinator::do_repair(unsigned int stripe_id,
+                            std::vector<int> failed_block_indexes) {
+  my_assert(failed_block_indexes.size() == 1);
+
+  // 记录了本次修复涉及的cluster id
+  std::vector<unsigned int> repair_span_cluster;
+  // 记录了需要从哪些cluster中，读取哪些block，记录顺序和repair_span_cluster对应
+  // cluster_id->vector((node_ip, node_port), block_index)
+  std::vector<std::vector<std::pair<std::pair<std::string, int>, int>>>
+      blocks_to_read_in_each_cluster;
+  // 记录了修复后block应存放的位置
+  // (node_id, block_index)
+  std::vector<std::pair<unsigned int, int>> new_locations_with_block_index;
+  generate_repair_plan(stripe_id, failed_block_indexes,
+                       blocks_to_read_in_each_cluster, repair_span_cluster,
+                       new_locations_with_block_index);
+
+  
+}
+
+static bool cmp_num_live_blocks(std::pair<unsigned int, std::vector<int>> &a,
+                                std::pair<unsigned int, std::vector<int>> &b) {
+  return a.second.size() > b.second.size();
+}
+
+void Coordinator::generate_repair_plan(
+    unsigned int stripe_id, std::vector<int> &failed_block_indexes,
+    std::vector<std::vector<std::pair<std::pair<std::string, int>, int>>>
+        &blocks_to_read_in_each_cluster,
+    std::vector<unsigned int> &repair_span_cluster,
+    std::vector<std::pair<unsigned int, int>> &new_locations_with_block_index) {
+  stripe_item &stripe = stripe_info_[stripe_id];
+  int k = stripe.k;
+  int real_l = stripe.real_l;
+  int g = stripe.g;
+  int b = stripe.b;
+
+  int failed_block_index = failed_block_indexes[0];
+  node_item &failed_node = node_info_[stripe.nodes[failed_block_index]];
+  unsigned int main_cluster_id = failed_node.cluster_id;
+  repair_span_cluster.push_back(main_cluster_id);
+
+  // 将修复好的块放回原位
+  new_locations_with_block_index.push_back(
+      {failed_node.node_id, failed_block_index});
+
+  my_assert(failed_block_index >= 0 &&
+            failed_block_index <= (k + g + real_l - 1));
+  if (failed_block_index >= k && failed_block_index <= (k + g - 1)) {
+    // 修复全局校验块
+    std::unordered_map<unsigned int, std::vector<int>>
+        live_blocks_in_each_cluster;
+    // 找到每个cluster中的存活块
+    for (int i = 0; i < (k + g - 1); i++) {
+      if (i != failed_block_index) {
+        node_item &live_node = node_info_[i];
+        live_blocks_in_each_cluster[live_node.cluster_id].push_back(i);
+      }
+    }
+
+    std::unordered_map<unsigned int, std::vector<int>>
+        live_blocks_needed_in_each_cluster;
+    int num_of_needed_live_blocks = k;
+    // 优先读取main cluster的，即损坏块所在cluster
+    for (auto live_block_index : live_blocks_in_each_cluster[main_cluster_id]) {
+      if (num_of_needed_live_blocks <= 0) {
+        break;
+      }
+      live_blocks_needed_in_each_cluster[main_cluster_id].push_back(
+          live_block_index);
+      num_of_needed_live_blocks--;
+    }
+
+    // 需要对剩下的cluster中存活块的数量进行排序，优先从存活块数量多的cluster中读取
+    std::vector<std::pair<unsigned int, std::vector<int>>>
+        sorted_live_blocks_in_each_cluster;
+    for (auto &cluster : live_blocks_in_each_cluster) {
+      if (cluster.first != main_cluster_id) {
+        sorted_live_blocks_in_each_cluster.push_back(
+            {cluster.first, cluster.second});
+      }
+    }
+    std::sort(sorted_live_blocks_in_each_cluster.begin(),
+              sorted_live_blocks_in_each_cluster.end(), cmp_num_live_blocks);
+    for (auto &cluster : sorted_live_blocks_in_each_cluster) {
+      for (auto &block_index : cluster.second) {
+        if (num_of_needed_live_blocks <= 0) {
+          break;
+        }
+        live_blocks_needed_in_each_cluster[cluster.first].push_back(
+            block_index);
+        num_of_needed_live_blocks--;
+      }
+    }
+
+    // 记录需要从main cluster中读取的存活块
+    std::vector<std::pair<std::pair<std::string, int>, int>>
+        blocks_to_read_in_main_cluster;
+    for (auto &block_index :
+         live_blocks_needed_in_each_cluster[main_cluster_id]) {
+      node_item &node = node_info_[stripe.nodes[block_index]];
+      blocks_to_read_in_main_cluster.push_back(
+          {{node.ip, node.port}, block_index});
+    }
+    blocks_to_read_in_each_cluster.push_back(blocks_to_read_in_main_cluster);
+
+    // 记录需要从其它cluster中读取的存活块
+    for (auto &cluster : live_blocks_needed_in_each_cluster) {
+      if (cluster.first != main_cluster_id) {
+        repair_span_cluster.push_back(cluster.first);
+
+        std::vector<std::pair<std::pair<std::string, int>, int>>
+            blocks_to_read_in_another_cluster;
+        for (auto &block_index : cluster.second) {
+          node_item &node = node_info_[stripe.nodes[block_index]];
+          blocks_to_read_in_another_cluster.push_back(
+              {{node.ip, node.port}, block_index});
+        }
+        blocks_to_read_in_each_cluster.push_back(
+            blocks_to_read_in_another_cluster);
+      }
+    }
+  } else {
+    // 修复数据块和局部校验块
+    int group_index = -1;
+    if (failed_block_index >= 0 && failed_block_index <= (k - 1)) {
+      group_index = failed_block_index / b;
+    } else {
+      group_index = failed_block_index - (k + g);
+    }
+
+    std::vector<std::pair<unsigned int, int>> live_blocks_in_group;
+    for (int i = 0; i < b; i++) {
+      int block_index = group_index * b + i;
+      if (block_index != failed_block_index) {
+        if (block_index >= k) {
+          break;
+        }
+        live_blocks_in_group.push_back(
+            {stripe.nodes[block_index], block_index});
+      }
+    }
+    if (failed_block_index != k + g + group_index) {
+      live_blocks_in_group.push_back(
+          {stripe.nodes[k + g + group_index], k + g + group_index});
+    }
+
+    std::unordered_set<unsigned int> span_cluster;
+    for (auto &live_block : live_blocks_in_group) {
+      span_cluster.insert(node_info_[live_block.first].cluster_id);
+    }
+    for (auto &cluster_involved : span_cluster) {
+      if (cluster_involved != main_cluster_id) {
+        repair_span_cluster.push_back(cluster_involved);
+      }
+    }
+
+    for (auto &cluster_id : repair_span_cluster) {
+      std::vector<std::pair<std::pair<std::string, int>, int>>
+          blocks_to_read_in_cur_cluster;
+      for (auto &live_block : live_blocks_in_group) {
+        node_item &node = node_info_[live_block.first];
+        if (node.cluster_id == cluster_id) {
+          blocks_to_read_in_cur_cluster.push_back(
+              {{node.ip, node.port}, live_block.second});
+        }
+      }
+      if (cluster_id == main_cluster_id) {
+        my_assert(blocks_to_read_in_cur_cluster.size() > 0);
+      }
+      blocks_to_read_in_each_cluster.push_back(blocks_to_read_in_cur_cluster);
+    }
+  }
 }

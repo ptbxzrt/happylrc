@@ -8,8 +8,8 @@ Client::Client(std::string ip, int port, std::string coordinator_ip,
                                  asio::ip::address::from_string(ip.c_str()),
                                  port_for_transfer_data_)) {
   rpc_coordinator_ = std::make_unique<coro_rpc::coro_rpc_client>();
-  async_simple::coro::syncAwait(
-      rpc_coordinator_->connect(coordinator_ip_, std::to_string(coordinator_port_)));
+  async_simple::coro::syncAwait(rpc_coordinator_->connect(
+      coordinator_ip_, std::to_string(coordinator_port_)));
 }
 
 void Client::set_ec_parameter(EC_schema ec_schema) {
@@ -22,8 +22,8 @@ void Client::set_ec_parameter(EC_schema ec_schema) {
 void Client::set(std::string key, std::string value) {
   auto [proxy_ip, proxy_port] =
       async_simple::coro::syncAwait(
-          rpc_coordinator_->call<&Coordinator::get_proxy_location>(key,
-                                                              value.size()))
+          rpc_coordinator_->call<&Coordinator::get_proxy_location>(
+              key, value.size()))
           .value();
 
   try {
@@ -75,4 +75,14 @@ std::string Client::get(std::string key) {
   peer.close(ignore_ec);
 
   return value_buf;
+}
+
+void Client::repair(std::vector<unsigned int> failed_node_ids) {
+  // 以node为单位修复
+  // 只实现了single node repair
+  // 当然可以扩充实现multi node repair
+  my_assert(failed_node_ids.size() == 1);
+
+  async_simple::coro::syncAwait(
+      rpc_coordinator_->call<&Coordinator::ask_for_repair>(failed_node_ids));
 }

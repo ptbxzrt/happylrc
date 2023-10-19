@@ -19,8 +19,9 @@ public:
   std::pair<std::string, int> get_proxy_location(std::string key,
                                                  size_t value_len);
   bool check_commit(std::string key);
-  size_t ask_for_data(std::string key, std::string client_ip, int client_port);
   void commit_object(std::string key);
+  size_t ask_for_data(std::string key, std::string client_ip, int client_port);
+  void ask_for_repair(std::vector<unsigned int> failed_node_ids);
 
   std::string echo(std::string s);
 
@@ -34,14 +35,22 @@ private:
   void connect_to_proxy(std::string ip, int port);
   void init_cluster_info();
   void init_proxy_info();
+  void do_repair(unsigned int stripe_id, std::vector<int> failed_block_indexes);
+  void generate_repair_plan(
+      unsigned int stripe_id, std::vector<int> &failed_block_indexes,
+      std::vector<std::vector<std::pair<std::pair<std::string, int>, int>>>
+          &blocks_to_read_in_each_cluster,
+      std::vector<unsigned int> &repair_span_cluster,
+      std::vector<std::pair<unsigned int, int>>
+          &new_locations_with_block_index);
 
   std::unique_ptr<coro_rpc::coro_rpc_server> rpc_server_{nullptr};
   EC_schema ec_schema_;
-  std::unordered_map<int, stripe_item> stripe_info_;
-  std::unordered_map<int, node_item> node_info_;
+  std::unordered_map<unsigned int, stripe_item> stripe_info_;
+  std::unordered_map<unsigned int, node_item> node_info_;
   // proxy用于传输数据的port是port
-  // 所以这里存的是proxy port
-  std::unordered_map<int, cluster_item> cluster_info_;
+  // 所以cluster_item存的是proxy port
+  std::unordered_map<unsigned int, cluster_item> cluster_info_;
   std::unordered_map<std::string, meta_info_of_object> commited_object_info_;
   std::unordered_map<std::string, meta_info_of_object> objects_waiting_commit_;
   std::mutex mutex_;
