@@ -1,3 +1,7 @@
+[paper]: https://dl.acm.org/doi/10.1145/3605573.3605635
+
+A distributed key-value storage prototype to assess the algorithm outlined in my [research paper][paper], which has been accepted by ICPP'23.
+
 ## 环境要求
 - 需要支持C++20的编译环境
 - 作者测试使用过的最低编译器版本是gcc 11.1.0 
