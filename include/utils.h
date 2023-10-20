@@ -33,7 +33,7 @@ typedef struct {
   int real_l; // num_of_local_parity_block, 不包括Azure_LRC_1中的“1”
   int g;      // num_of_global_parity_block
   int b;      // num_of_data_block_per_group
-  size_t strip_size_upper;
+  size_t stripe_size_upper;
 } EC_schema;
 
 typedef struct {
@@ -50,6 +50,7 @@ typedef struct {
   int g;
   int b;
   size_t block_size;
+  // 依次为数据块、全局校验块、局部校验块
   std::vector<unsigned int> nodes;
 } stripe_item;
 

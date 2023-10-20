@@ -22,8 +22,9 @@ int main(int argc, char **argv) {
 
   if (args[1] == "Azure_LRC") {
     ec_schema.encode_type = Encode_Type::Azure_LRC;
+  } else {
+    my_assert(false);
   }
-  { my_assert(false); }
 
   Placement_Type placement_type;
   if (args[2] == "random") {
@@ -41,18 +42,14 @@ int main(int argc, char **argv) {
   }
 
   int value_length = -1;
-  try {
-    ec_schema.k = std::stoi(args[3]);
-    ec_schema.real_l = std::stoi(args[4]);
-    // 只考虑k被l整除的情况
-    my_assert(ec_schema.real_l == -1 || ec_schema.k % ec_schema.real_l == 0);
-    ec_schema.b = ec_schema.k / ec_schema.real_l;
-    ec_schema.g = std::stoi(args[5]);
-    ec_schema.strip_size_upper = std::stoi(args[6]);
-    value_length = std::stoi(args[7]);
-  } catch (const std::exception &e) {
-    std::cerr << e.what() << '\n';
-  }
+  ec_schema.k = std::stoi(args[3]);
+  ec_schema.real_l = std::stoi(args[4]);
+  // 只考虑k被l整除的情况
+  my_assert(ec_schema.real_l == -1 || ec_schema.k % ec_schema.real_l == 0);
+  ec_schema.b = ec_schema.k / ec_schema.real_l;
+  ec_schema.g = std::stoi(args[5]);
+  ec_schema.stripe_size_upper = std::stoi(args[6]);
+  value_length = std::stoi(args[7]);
 
   // 如果部署在集群上, 一定要将client ip地址设置为1个实际的IP地址, 而非"0.0.0.0"
   // 因为这个IP地址会被proxy使用

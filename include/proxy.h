@@ -6,8 +6,7 @@
 
 class Proxy {
 public:
-  Proxy(std::string ip, int port, std::string coordinator_ip,
-        int coordinator_port);
+  Proxy(std::string ip, int port);
   ~Proxy();
 
   void start();
@@ -19,21 +18,16 @@ public:
   void help_repair(help_repair_plan repair_plan);
 
 private:
-  void write_to_datanode(const char *key, size_t key_len,
-                                   const char *value, size_t value_len,
-                                   const char *ip, int port);
-  void read_from_datanode(const char *key, size_t key_len,
-                                    char *value, size_t value_len,
-                                    const char *ip, int port);
+  void write_to_datanode(const char *key, size_t key_len, const char *value,
+                         size_t value_len, const char *ip, int port);
+  void read_from_datanode(const char *key, size_t key_len, char *value,
+                          size_t value_len, const char *ip, int port);
 
   std::unique_ptr<coro_rpc::coro_rpc_server> rpc_server_{nullptr};
-  std::unique_ptr<coro_rpc::coro_rpc_client> rpc_coordinator_{nullptr};
   int port_for_rpc_;
   int port_for_transfer_data_;
   std::string ip_;
   asio::io_context io_context_{};
   asio::ip::tcp::acceptor acceptor_;
-  std::string coordinator_ip_;
-  int coordinator_port_;
   std::mutex mutex_;
 };

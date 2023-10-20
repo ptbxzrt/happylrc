@@ -1,17 +1,16 @@
 #include "../../include/coordinator.h"
 #include "../../include/tinyxml2.h"
 
-std::string Coordinator::echo(std::string s) { return s + "zhaohao"; }
-
 Coordinator::Coordinator(std::string ip, int port, std::string config_file_path)
     : ip_(ip), port_(port), config_file_path_(config_file_path), alpha_(0.5) {
-  rpc_server_ = std::make_unique<coro_rpc::coro_rpc_server>(1, port_);
+  rpc_server_ = std::make_unique<coro_rpc::coro_rpc_server>(4, port_);
+
   rpc_server_->register_handler<&Coordinator::set_erasure_coding_parameters>(
       this);
-  rpc_server_->register_handler<&Coordinator::check_commit>(this);
+  rpc_server_->register_handler<&Coordinator::get_proxy_location>(this);
+  rpc_server_->register_handler<&Coordinator::commit_object>(this);
   rpc_server_->register_handler<&Coordinator::ask_for_data>(this);
   rpc_server_->register_handler<&Coordinator::echo>(this);
-  rpc_server_->register_handler<&Coordinator::commit_object>(this);
   rpc_server_->register_handler<&Coordinator::ask_for_repair>(this);
 
   init_cluster_info();
@@ -19,6 +18,8 @@ Coordinator::Coordinator(std::string ip, int port, std::string config_file_path)
 }
 
 Coordinator::~Coordinator() { rpc_server_->stop(); }
+
+std::string Coordinator::echo(std::string s) { return s + "zhaohao"; }
 
 void Coordinator::start() { auto err = rpc_server_->start(); }
 
@@ -58,14 +59,12 @@ void Coordinator::init_cluster_info() {
 
 void Coordinator::init_proxy_info() {
   for (auto cur = cluster_info_.begin(); cur != cluster_info_.end(); cur++) {
-    // 注意加1
-    connect_to_proxy(cur->second.proxy_ip, cur->second.proxy_port + 1);
+    connect_to_proxy(cur->second.proxy_ip, cur->second.proxy_port);
   }
 }
 
-bool Coordinator::set_erasure_coding_parameters(EC_schema ec_schema) {
+void Coordinator::set_erasure_coding_parameters(EC_schema ec_schema) {
   ec_schema_ = ec_schema;
-  return true;
 }
 
 std::pair<std::string, int> Coordinator::get_proxy_location(std::string key,
@@ -82,7 +81,7 @@ std::pair<std::string, int> Coordinator::get_proxy_location(std::string key,
 
   placement_info placement;
 
-  if (ec_schema_.strip_size_upper >= new_object.value_len) {
+  if (ec_schema_.stripe_size_upper >= new_object.value_len) {
     size_t block_size = std::ceil(static_cast<double>(new_object.value_len) /
                                   static_cast<double>(ec_schema_.k));
     block_size = 64 * std::ceil(static_cast<double>(block_size) / 64.0);
@@ -101,7 +100,7 @@ std::pair<std::string, int> Coordinator::get_proxy_location(std::string key,
     }
   } else {
     size_t block_size =
-        std::ceil(static_cast<double>(ec_schema_.strip_size_upper) /
+        std::ceil(static_cast<double>(ec_schema_.stripe_size_upper) /
                   static_cast<double>(ec_schema_.k));
     block_size = 64 * std::ceil(static_cast<double>(block_size) / 64.0);
 
@@ -174,7 +173,7 @@ static bool cmp_combined_cost(std::pair<unsigned int, double> &a,
 
 void Coordinator::generate_placement_plan(std::vector<unsigned int> &nodes,
                                           unsigned int stripe_id) {
-  // 我的理解，flat放置不用单独实现，在实验室限制服务器网速即可
+  // 我的理解,flat放置不用单独实现,在实验室限制服务器网速即可
   // 因此这里没有实现flag放置
 
   stripe_item &stripe = stripe_info_[stripe_id];
@@ -241,14 +240,14 @@ void Coordinator::generate_placement_plan(std::vector<unsigned int> &nodes,
     std::vector<std::vector<int>> partition_plan =
         partition_strategy_ECWIDE(k, g, b);
 
-    // ECWIDE没有考虑load balance，随机选择节点存放
+    // ECWIDE没有考虑load balance,随机选择节点存放
     select_by_random(partition_plan, nodes, stripe_id);
   } else if (stripe.placement_type ==
              Placement_Type::strategy_ICPP23_IGNORE_LOAD) {
     std::vector<std::vector<int>> partition_plan =
         partition_strategy_ICPP23(k, g, b);
 
-    // 不考虑load balance，随机选择节点存放
+    // 不考虑load balance,随机选择节点存放
     select_by_random(partition_plan, nodes, stripe_id);
   } else if (stripe.placement_type ==
              Placement_Type::strategy_ICPP23_CONSIDER_LOAD) {
@@ -345,16 +344,16 @@ void Coordinator::select_by_load(std::vector<std::vector<int>> &partition_plan,
       nodes[data_block_idx++] = node_id;
       node_info_[node_id].stripe_ids.insert(stripe_id);
     }
-    // local
-    for (int j = 0; j < partition_plan[i][1]; j++) {
-      int node_id = sorted_nodes_in_each_cluster[node_idx++].first;
-      nodes[local_block_idx++] = node_id;
-      node_info_[node_id].stripe_ids.insert(stripe_id);
-    }
     // global
     for (int j = 0; j < partition_plan[i][2]; j++) {
       int node_id = sorted_nodes_in_each_cluster[node_idx++].first;
       nodes[global_block_idx++] = node_id;
+      node_info_[node_id].stripe_ids.insert(stripe_id);
+    }
+    // local
+    for (int j = 0; j < partition_plan[i][1]; j++) {
+      int node_id = sorted_nodes_in_each_cluster[node_idx++].first;
+      nodes[local_block_idx++] = node_id;
       node_info_[node_id].stripe_ids.insert(stripe_id);
     }
   }
@@ -431,7 +430,7 @@ void Coordinator::select_by_random(
     auto find_a_node_for_a_block = [&, this](int &block_idx) {
       int node_idx;
       do {
-        // 注意，此处是node_idx，而非node_id
+        // 注意,此处是node_idx,而非node_id
         // cluster.nodes[node_idx]才是node_id
         node_idx = dis_node(gen_node);
       } while (visited_nodes[node_idx] == true);
@@ -440,16 +439,18 @@ void Coordinator::select_by_random(
       node_info_[cluster.nodes[node_idx]].stripe_ids.insert(stripe_id);
     };
 
+    nodes.resize(stripe_info_[stripe_id].k + stripe_info_[stripe_id].real_l +
+                 stripe_info_[stripe_id].g);
     for (int j = 0; j < partition_plan[i][0]; j++) {
       find_a_node_for_a_block(data_block_idx);
     }
 
-    for (int j = 0; j < partition_plan[i][1]; j++) {
-      find_a_node_for_a_block(local_block_idx);
-    }
-
     for (int j = 0; j < partition_plan[i][2]; j++) {
       find_a_node_for_a_block(global_block_idx);
+    }
+
+    for (int j = 0; j < partition_plan[i][1]; j++) {
+      find_a_node_for_a_block(local_block_idx);
     }
   }
 }
@@ -516,7 +517,7 @@ Coordinator::partition_strategy_ICPP23(int k, int g, int b) {
   // 遍历每个partition查看剩余空间
   for (auto i = 0; i < partition_plan.size(); i++) {
     int num_of_group = partition_plan[i][1];
-    // 若某个partition不包含局部校验块，说明这里所有块属于1个group
+    // 若某个partition不包含局部校验块,说明这里所有块属于1个group
     if (partition_plan[i][1] == 0) {
       num_of_group = 1;
     }
@@ -588,15 +589,7 @@ void Coordinator::connect_to_proxy(std::string ip, int port) {
 
   proxys_[location] = std::make_unique<coro_rpc::coro_rpc_client>();
   async_simple::coro::syncAwait(
-      proxys_[location]->connect(ip, std::to_string(port)));
-}
-
-bool Coordinator::check_commit(std::string key) {
-  std::unique_lock<std::mutex> lck(mutex_);
-  while (commited_object_info_.contains(key) == false) {
-    cv_.wait(lck);
-  }
-  return true;
+      proxys_[location]->connect(ip, std::to_string(port + 1000)));
 }
 
 void Coordinator::commit_object(std::string key) {
@@ -604,7 +597,6 @@ void Coordinator::commit_object(std::string key) {
   my_assert(commited_object_info_.contains(key) == false &&
             objects_waiting_commit_.contains(key) == true);
   commited_object_info_[key] = objects_waiting_commit_[key];
-  cv_.notify_all();
   objects_waiting_commit_.erase(key);
 }
 
@@ -619,9 +611,14 @@ size_t Coordinator::ask_for_data(std::string key, std::string client_ip,
   mutex_.unlock();
 
   placement_info placement;
-  if (object.value_len > ec_schema_.strip_size_upper) {
+  if (ec_schema_.stripe_size_upper >= object.value_len) {
+    size_t block_size = std::ceil(static_cast<double>(object.value_len) /
+                                  static_cast<double>(ec_schema_.k));
+    block_size = 64 * std::ceil(static_cast<double>(block_size) / 64.0);
+    init_placement(placement, key, object.value_len, block_size, -1);
+  } else {
     size_t block_size =
-        std::ceil(static_cast<double>(ec_schema_.strip_size_upper) /
+        std::ceil(static_cast<double>(ec_schema_.stripe_size_upper) /
                   static_cast<double>(ec_schema_.k));
     block_size = 64 * std::ceil(static_cast<double>(block_size) / 64.0);
 
@@ -635,11 +632,6 @@ size_t Coordinator::ask_for_data(std::string key, std::string client_ip,
     }
     init_placement(placement, key, object.value_len, block_size,
                    tail_block_size);
-  } else {
-    size_t block_size = std::ceil(static_cast<double>(object.value_len) /
-                                  static_cast<double>(ec_schema_.k));
-    block_size = 64 * std::ceil(static_cast<double>(block_size) / 64.0);
-    init_placement(placement, key, object.value_len, block_size, -1);
   }
 
   for (auto stripe_id : object.stripes) {
@@ -698,7 +690,7 @@ void Coordinator::do_repair(unsigned int stripe_id,
 
   // 记录了本次修复涉及的cluster id
   std::vector<unsigned int> repair_span_cluster;
-  // 记录了需要从哪些cluster中，读取哪些block，记录顺序和repair_span_cluster对应
+  // 记录了需要从哪些cluster中,读取哪些block,记录顺序和repair_span_cluster对应
   // cluster_id->vector((node_ip, node_port), block_index)
   std::vector<std::vector<std::pair<std::pair<std::string, int>, int>>>
       blocks_to_read_in_each_cluster;
@@ -754,10 +746,9 @@ void Coordinator::do_repair(unsigned int stripe_id,
 
         std::string proxy_ip = cluster_info_[main_cluster_id].proxy_ip;
         int port = cluster_info_[main_cluster_id].proxy_port;
-        // 注意port + 1
         async_simple::coro::syncAwait(
-            proxys_[proxy_ip + std::to_string(port + 1)]
-                ->call<&Proxy::main_repair>(repair_plan));
+            proxys_[proxy_ip + std::to_string(port)]->call<&Proxy::main_repair>(
+                repair_plan));
       }));
     } else {
       // help cluster
@@ -788,10 +779,9 @@ void Coordinator::do_repair(unsigned int stripe_id,
 
         repair_plan.proxy_ip = cluster_info_[cluster_id].proxy_ip;
         repair_plan.proxy_port = cluster_info_[cluster_id].proxy_port;
-        // 注意port + 1
         async_simple::coro::syncAwait(
             proxys_[repair_plan.proxy_ip +
-                    std::to_string(repair_plan.proxy_port + 1)]
+                    std::to_string(repair_plan.proxy_port)]
                 ->call<&Proxy::help_repair>(repair_plan));
       }));
     }
@@ -846,7 +836,7 @@ void Coordinator::generate_repair_plan(
     std::unordered_map<unsigned int, std::vector<int>>
         live_blocks_needed_in_each_cluster;
     int num_of_needed_live_blocks = k;
-    // 优先读取main cluster的，即损坏块所在cluster
+    // 优先读取main cluster的,即损坏块所在cluster
     for (auto live_block_index : live_blocks_in_each_cluster[main_cluster_id]) {
       if (num_of_needed_live_blocks <= 0) {
         break;
@@ -856,7 +846,7 @@ void Coordinator::generate_repair_plan(
       num_of_needed_live_blocks--;
     }
 
-    // 需要对剩下的cluster中存活块的数量进行排序，优先从存活块数量多的cluster中读取
+    // 需要对剩下的cluster中存活块的数量进行排序,优先从存活块数量多的cluster中读取
     std::vector<std::pair<unsigned int, std::vector<int>>>
         sorted_live_blocks_in_each_cluster;
     for (auto &cluster : live_blocks_in_each_cluster) {

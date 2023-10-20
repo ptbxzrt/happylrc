@@ -5,7 +5,7 @@ Datanode::Datanode(std::string ip, int port)
       acceptor_(io_context_,
                 asio::ip::tcp::endpoint(
                     asio::ip::address::from_string(ip.c_str()), port)) {
-  // port是datanode的地址，port + 1000是redis的地址
+  // port是datanode的地址,port + 1000是redis的地址
   std::string url = "tcp://" + ip_ + ":" + std::to_string(port_ + 1000);
   redis_ = std::make_unique<sw::redis::Redis>(url);
 }

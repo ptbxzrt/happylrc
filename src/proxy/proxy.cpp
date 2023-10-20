@@ -5,10 +5,8 @@
 #include <thread>
 #include <unordered_map>
 
-Proxy::Proxy(std::string ip, int port, std::string coordinator_ip,
-             int coordinator_port)
-    : ip_(ip), port_for_rpc_(port + 1), port_for_transfer_data_(port),
-      coordinator_ip_(coordinator_ip), coordinator_port_(coordinator_port),
+Proxy::Proxy(std::string ip, int port)
+    : ip_(ip), port_for_rpc_(port + 1000), port_for_transfer_data_(port),
       acceptor_(io_context_, asio::ip::tcp::endpoint(
                                  asio::ip::address::from_string(ip.c_str()),
                                  port_for_transfer_data_)) {
@@ -17,10 +15,6 @@ Proxy::Proxy(std::string ip, int port, std::string coordinator_ip,
   rpc_server_->register_handler<&Proxy::decode_and_transfer_data>(this);
   rpc_server_->register_handler<&Proxy::main_repair>(this);
   rpc_server_->register_handler<&Proxy::help_repair>(this);
-
-  rpc_coordinator_ = std::make_unique<coro_rpc::coro_rpc_client>();
-  async_simple::coro::syncAwait(rpc_coordinator_->connect(
-      coordinator_ip_, std::to_string(coordinator_port_)));
 }
 
 Proxy::~Proxy() {
@@ -30,7 +24,7 @@ Proxy::~Proxy() {
 
 void Proxy::start() { auto err = rpc_server_->start(); }
 
-// 非阻塞的，会立即返回
+// 非阻塞的,会立即返回
 void Proxy::start_encode_and_store_object(placement_info placement) {
   auto encode_and_store = [this, placement]() {
     asio::ip::tcp::socket peer(io_context_);
@@ -48,12 +42,8 @@ void Proxy::start_encode_and_store_object(placement_info placement) {
     my_assert(readed_len_of_key == key_buf.size());
 
     size_t readed_len_of_value =
-        asio::read(peer, asio::buffer(value_buf.data(), value_buf.size()));
-    my_assert(readed_len_of_value == value_buf.size());
-
-    asio::error_code ignore_ec;
-    peer.shutdown(asio::ip::tcp::socket::shutdown_both, ignore_ec);
-    peer.close(ignore_ec);
+        asio::read(peer, asio::buffer(value_buf.data(), placement.value_len));
+    my_assert(readed_len_of_value == placement.value_len);
 
     char *object_value = value_buf.data();
     for (auto i = 0; i < placement.stripe_ids.size(); i++) {
@@ -118,15 +108,19 @@ void Proxy::start_encode_and_store_object(placement_info placement) {
       object_value += (placement.k * cur_block_size);
     }
 
-    async_simple::coro::syncAwait(
-        rpc_coordinator_->call<&Coordinator::commit_object>(placement.key));
+    std::vector<char> finish(1);
+    asio::write(peer, asio::buffer(finish, finish.size()));
+
+    asio::error_code ignore_ec;
+    peer.shutdown(asio::ip::tcp::socket::shutdown_both, ignore_ec);
+    peer.close(ignore_ec);
   };
 
   std::thread new_thread(encode_and_store);
   new_thread.detach();
 }
 
-// 非阻塞的，会立即返回
+// 非阻塞的,会立即返回
 void Proxy::decode_and_transfer_data(placement_info placement) {
   auto decode_and_transfer = [this, placement]() {
     std::string object_value;
@@ -240,8 +234,7 @@ void Proxy::read_from_datanode(const char *key, size_t key_len, char *value,
 
   asio::write(peer, asio::buffer(key, key_len));
 
-  std::vector<unsigned char> value_buf(value_len);
-  asio::read(peer, asio::buffer(value_buf, value_buf.size()));
+  asio::read(peer, asio::buffer(value, value_len));
 
   asio::error_code ignore_ec;
   peer.shutdown(asio::ip::tcp::socket::shutdown_both, ignore_ec);
@@ -273,7 +266,7 @@ void Proxy::main_repair(main_repair_plan repair_plan) {
       acceptor_.accept(peer);
       mutex_.unlock();
 
-      // 读取help cluster id，
+      // 读取help cluster id,
       std::vector<unsigned char> cluster_id_buf(sizeof(int));
       asio::read(peer, asio::buffer(cluster_id_buf, cluster_id_buf.size()));
       int help_cluster_id = bytes_to_int(cluster_id_buf);
@@ -289,7 +282,7 @@ void Proxy::main_repair(main_repair_plan repair_plan) {
                    asio::buffer(num_of_blocks_buf, num_of_blocks_buf.size()));
         int num_of_blocks = bytes_to_int(num_of_blocks_buf);
 
-        // 实际上这里的num_of_blocks只可能是1，因为目前只考虑和实现单块修复流程
+        // 实际上这里的num_of_blocks只可能是1,因为目前只考虑和实现单块修复流程
         // 读每个block的block index及数据
         for (int j = 0; j < num_of_blocks; j++) {
           std::vector<unsigned char> block_index_buf(sizeof(int));
@@ -352,8 +345,8 @@ void Proxy::main_repair(main_repair_plan repair_plan) {
   int g = repair_plan.g;
   if (failed_block_index >= k && failed_block_index <= (k + g - 1)) {
     // 修复全局校验块
-    // 因为只考虑单块修复，所以repair_plan.failed_blocks_index的值只可能为1
-    // 实际上，这个if语句内的代码逻辑，也适用于多块修复
+    // 因为只考虑单块修复,所以repair_plan.failed_blocks_index的值只可能为1
+    // 实际上,这个if语句内的代码逻辑,也适用于多块修复
 
     // 编码矩阵“去掉”单位矩阵的部分
     std::vector<int> matrix;
@@ -425,7 +418,7 @@ void Proxy::main_repair(main_repair_plan repair_plan) {
         char **coding = (char **)coding_v.data();
 
         for (auto i = 0; i < repair_plan.failed_blocks_index.size(); i++) {
-          // 这一步的意义是，从help_matrix中找到存活块对应的系数
+          // 这一步的意义是,从help_matrix中找到存活块对应的系数
           int *coff = &(help_matrix[i * k]);
           std::vector<int> coding_matrix(1 * num_of_live_blocks_in_cur_cluster,
                                          1);
@@ -453,7 +446,7 @@ void Proxy::main_repair(main_repair_plan repair_plan) {
                                  coding_matrix.data(), data, coding,
                                  repair_plan.block_size);
 
-          // 这里之所以这样做一个判断，是因为当编码矩阵的元素为0时，Jerasure会立即返回，不做任何计算
+          // 这里之所以这样做一个判断,是因为当编码矩阵的元素为0时,Jerasure会立即返回,不做任何计算
           // 但我们则希望编码结果能正常输出1个全0矩阵
           if (sum == 0) {
             encode_result = std::vector<char>(repair_plan.block_size, 0);
@@ -650,7 +643,7 @@ void Proxy::help_repair(help_repair_plan repair_plan) {
         char **coding = (char **)coding_v.data();
 
         for (auto i = 0; i < repair_plan.failed_blocks_index.size(); i++) {
-          // 这一步的意义是，从help_matrix中找到存活块对应的系数
+          // 这一步的意义是,从help_matrix中找到存活块对应的系数
           int *coff = &(help_matrix[i * k]);
           std::vector<int> coding_matrix(1 * num_of_live_blocks_in_cur_cluster,
                                          1);
@@ -678,7 +671,7 @@ void Proxy::help_repair(help_repair_plan repair_plan) {
                                  coding_matrix.data(), data, coding,
                                  repair_plan.block_size);
 
-          // 这里之所以这样做一个判断，是因为当编码矩阵的元素为0时，Jerasure会立即返回，不做任何计算
+          // 这里之所以这样做一个判断,是因为当编码矩阵的元素为0时,Jerasure会立即返回,不做任何计算
           // 但我们则希望编码结果能正常输出1个全0矩阵
           if (sum == 0) {
             encode_result = std::vector<char>(repair_plan.block_size, 0);

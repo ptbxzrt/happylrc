@@ -8,5 +8,5 @@ cmake .. -DCMAKE_BUILD_TYPE=Debug
 cmake --build .
 cmake --install .
 
-如果在本地单机上运行项目，相关参数
+如果在本地单机上运行项目,相关参数
 - coordinator的rpc端口号：11111

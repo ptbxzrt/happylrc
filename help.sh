@@ -19,10 +19,10 @@ build_dir="build"
 
 # 检查build文件夹是否存在
 if [ -d "$build_dir" ]; then
-    echo "build文件夹已经存在，进入该文件夹"
+    echo "build文件夹已经存在,进入该文件夹"
     cd "$build_dir"
 else
-    echo "build文件夹不存在，创建并进入"
+    echo "build文件夹不存在,创建并进入"
     mkdir "$build_dir"
     cd "$build_dir"
 fi

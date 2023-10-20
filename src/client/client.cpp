@@ -15,10 +15,9 @@ Client::Client(std::string ip, int port, std::string coordinator_ip,
 Client::~Client() { acceptor_.close(); }
 
 void Client::set_ec_parameter(EC_schema ec_schema) {
-  auto r = async_simple::coro::syncAwait(
+  async_simple::coro::syncAwait(
       rpc_coordinator_->call<&Coordinator::set_erasure_coding_parameters>(
           ec_schema));
-  my_assert(r.value());
 }
 
 void Client::set(std::string key, std::string value) {
@@ -28,26 +27,23 @@ void Client::set(std::string key, std::string value) {
               key, value.size()))
           .value();
 
-  try {
-    asio::ip::tcp::socket peer(io_context_);
-    asio::ip::tcp::endpoint endpoint(asio::ip::make_address(proxy_ip),
-                                     proxy_port);
-    peer.connect(endpoint);
+  asio::ip::tcp::socket peer(io_context_);
+  asio::ip::tcp::endpoint endpoint(asio::ip::make_address(proxy_ip),
+                                   proxy_port);
+  peer.connect(endpoint);
 
-    asio::write(peer, asio::buffer(key, key.size()));
-    asio::write(peer, asio::buffer(value, value.size()));
+  asio::write(peer, asio::buffer(key, key.size()));
+  asio::write(peer, asio::buffer(value, value.size()));
 
-    asio::error_code ignore_ec;
-    peer.shutdown(asio::ip::tcp::socket::shutdown_both, ignore_ec);
-    peer.close(ignore_ec);
-  } catch (const std::exception &e) {
-    std::cerr << e.what() << '\n';
-  }
+  std::vector<char> finish(1);
+  asio::read(peer, asio::buffer(finish, finish.size()));
 
-  auto commited = async_simple::coro::syncAwait(
-                      rpc_coordinator_->call<&Coordinator::check_commit>(key))
-                      .value();
-  my_assert(commited);
+  asio::error_code ignore_ec;
+  peer.shutdown(asio::ip::tcp::socket::shutdown_both, ignore_ec);
+  peer.close(ignore_ec);
+
+  async_simple::coro::syncAwait(
+      rpc_coordinator_->call<&Coordinator::commit_object>(key));
 }
 
 std::string Client::get(std::string key) {

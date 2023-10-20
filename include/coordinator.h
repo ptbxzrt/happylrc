@@ -15,10 +15,9 @@ public:
   void start();
 
   // rpc调用
-  bool set_erasure_coding_parameters(EC_schema ec_schema);
+  void set_erasure_coding_parameters(EC_schema ec_schema);
   std::pair<std::string, int> get_proxy_location(std::string key,
                                                  size_t value_len);
-  bool check_commit(std::string key);
   void commit_object(std::string key);
   size_t ask_for_data(std::string key, std::string client_ip, int client_port);
   void ask_for_repair(std::vector<unsigned int> failed_node_ids);
@@ -69,10 +68,9 @@ private:
   std::unordered_map<std::string, meta_info_of_object> commited_object_info_;
   std::unordered_map<std::string, meta_info_of_object> objects_waiting_commit_;
   std::mutex mutex_;
-  std::condition_variable cv_;
   unsigned int next_stripe_id_{0};
-  // proxy用于rpc的port是port + 1
-  // 这里的key是port + 1，因为在connect时需要用port + 1进行connect
+  // proxy用于rpc的port是port + 1000
+  // 这里的key是port,但在connect时需要用port + 1000进行connect
   std::unordered_map<std::string, std::unique_ptr<coro_rpc::coro_rpc_client>>
       proxys_;
   std::string ip_;
