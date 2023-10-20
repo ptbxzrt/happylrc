@@ -141,3 +141,11 @@ sh run_datanode_and_proxy.sh
 - proxy: 每个cluster有1个proxy, 是该cluster与外界通信的媒介
 - datanode: 存储数据
 ![Alt text](architecture.png)
+
+
+## 基本操作
+- 写: client会将数据发送个某个cluster的proxy, 该proxy对数据编码生成条带, 然后根据coordinator制定的放置策略将各个块写到指定datanode
+
+- 读: coordinator随机选择并告诉某个cluster的proxy需要从何处读取哪些块, proxy读取到所需的块后, 将块进行拼接, 恢复原始数据发送给client
+
+- 修复: coordinator将损坏块所在cluster的proxy指定为main proxy, 若修复操作所需的存活块在其它cluster, 这些cluster的proxy则被coordinator指定为help proxy, main proxy和所有help proxy合作修复损坏块. 具体而言, help proxy从本cluster读取所需存活块, 做partial decoding, 发送给main proxy. main proxy也从本cluster读取所需存活块, 做partial decoding, 然后将自己的partial block和来自help proxy的partial block异或合并, 即可修复得到损坏块
