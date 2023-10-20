@@ -68,7 +68,7 @@ int main(int argc, char **argv) {
     client.set(kv.first, kv.second);
   }
 
-  // datanode的数量，每个节点都修1次
+  // datanode的数量, 每个节点都修1次
   unsigned int num_of_nodes = 40;
   for (unsigned int i = 0; i < num_of_nodes; i++) {
     std::cout << "repair node " << i << std::endl;
