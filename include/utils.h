@@ -7,6 +7,7 @@
 #include <random>
 #include <source_location>
 #include <string>
+#include <unordered_map>
 #include <unordered_set>
 
 #define COORDINATOR_RPC_PORT 11111
@@ -125,16 +126,14 @@ typedef struct {
       inner_cluster_help_blocks_info;
   std::vector<int> live_blocks_index;
   std::vector<int> failed_blocks_index;
-  std::string proxy_ip;
-  int proxy_port;
+  std::string main_proxy_ip;
+  int main_proxy_port;
 } help_repair_plan;
 
-// 生成随机字符串
-std::string generate_random_string(int length);
-
-// 生成不重复的随机字符串对
-std::pair<std::string, std::string>
-generate_unique_random_strings(int key_length, int value_length);
+// 生成若干不重复的随机字符串对
+void generate_unique_random_strings(
+    int key_length, int value_length, int n,
+    std::unordered_map<std::string, std::string> &key_value);
 
 // 生成某个数组或容器的随机索引
 int random_index(size_t len);

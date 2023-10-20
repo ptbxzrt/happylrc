@@ -58,12 +58,27 @@ int main(int argc, char **argv) {
 
   client.set_ec_parameter(ec_schema);
 
-  std::unordered_map<std::string, std::string> key_value_s;
-  auto [key, value] = generate_unique_random_strings(10, 1024 * 1024);
-  key_value_s[key] = value;
-  client.set(key, value);
-  auto stored_value = client.get(key);
-  my_assert(stored_value == value);
+  std::unordered_map<std::string, std::string> key_value;
+
+  int num_of_kv_pairs = 20;
+  generate_unique_random_strings(5, value_length, num_of_kv_pairs, key_value);
+
+  for (auto &kv : key_value) {
+    std::cout << "set kv: " << kv.first << std::endl;
+    client.set(kv.first, kv.second);
+  }
+
+  // datanode的数量，每个节点都修1次
+  unsigned int num_of_nodes = 40;
+  for (unsigned int i = 0; i < num_of_nodes; i++) {
+    std::cout << "repair node " << i << std::endl;
+    client.repair({i});
+  }
+
+  for (auto &kv : key_value) {
+    auto stored_value = client.get(kv.first);
+    my_assert(stored_value == kv.second);
+  }
 
   return 0;
 }

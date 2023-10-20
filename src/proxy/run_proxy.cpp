@@ -45,7 +45,7 @@ void daemonize() {
 
 int main(int argc, char **argv) {
   // 6. 将程序修改为守护进程
-  // daemonize();
+  daemonize();
 
   // 7. 在守护进程中执行你的程序
   my_assert(argc == 3);

@@ -550,8 +550,8 @@ void Proxy::help_repair(help_repair_plan repair_plan) {
   }
 
   asio::ip::tcp::socket peer(io_context_);
-  asio::ip::tcp::endpoint endpoint(asio::ip::make_address(repair_plan.proxy_ip),
-                                   repair_plan.proxy_port);
+  asio::ip::tcp::endpoint endpoint(asio::ip::make_address(repair_plan.main_proxy_ip),
+                                   repair_plan.main_proxy_port);
   peer.connect(endpoint);
 
   std::vector<unsigned char> cluster_id_buf =

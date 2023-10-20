@@ -50,7 +50,7 @@ kill -9 $(pidof run_proxy)
 ./build/run_datanode 0.0.0.0 9309
 
 # run proxy
-# ./build/run_proxy 0.0.0.0 50005
-# ./build/run_proxy 0.0.0.0 50015
-# ./build/run_proxy 0.0.0.0 50025
-# ./build/run_proxy 0.0.0.0 50035
+./build/run_proxy 0.0.0.0 50005
+./build/run_proxy 0.0.0.0 50015
+./build/run_proxy 0.0.0.0 50025
+./build/run_proxy 0.0.0.0 50035

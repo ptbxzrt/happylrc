@@ -1,14 +1,13 @@
 #include "../include/utils.h"
 
+const std::string charset =
+    "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+
 // 生成随机字符串
-std::string generate_random_string(int length) {
-  const std::string charset =
-      "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
-  const int charset_length = charset.length();
-
-  std::mt19937 rng(std::time(0)); // 使用当前时间作为随机数种子
-  std::uniform_int_distribution<int> distribution(0, charset_length - 1);
-
+std::string
+generate_random_string(int length,
+                       std::uniform_int_distribution<int> &distribution,
+                       std::mt19937 &rng) {
   std::string result;
 
   for (int i = 0; i < length; ++i) {
@@ -19,20 +18,25 @@ std::string generate_random_string(int length) {
   return result;
 }
 
-// 生成不重复的随机字符串对
-std::pair<std::string, std::string>
-generate_unique_random_strings(int key_length, int value_length) {
-  std::unordered_set<std::string> generated_keys;
+// 生成若干不重复的随机字符串对
+void generate_unique_random_strings(
+    int key_length, int value_length, int n,
+    std::unordered_map<std::string, std::string> &key_value) {
 
-  std::string key, value;
+  std::mt19937 rng(std::time(0)); // 使用当前时间作为随机数种子
+  std::uniform_int_distribution<int> distribution(0, charset.size() - 1);
 
-  do {
-    key = generate_random_string(key_length);
-  } while (!generated_keys.insert(key).second);
+  for (int i = 0; i < n; i++) {
+    std::string key;
 
-  value = generate_random_string(value_length);
+    do {
+      key = generate_random_string(key_length, distribution, rng);
+    } while (key_value.contains(key) == true);
 
-  return std::make_pair(key, value);
+    std::string value(value_length, key[0]);
+
+    key_value[key] = value;
+  }
 }
 
 int random_index(size_t len) {
