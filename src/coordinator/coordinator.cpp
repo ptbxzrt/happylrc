@@ -24,6 +24,23 @@ std::string Coordinator::echo(std::string s) { return s + "zhaohao"; }
 void Coordinator::start() { auto err = rpc_server_->start(); }
 
 void Coordinator::init_cluster_info() {
+  std::vector<double> storages = {16, 16, 16, 16, 16, 16, 16, 16, 64, 64,
+
+                                  16, 16, 16, 16, 16, 16, 16, 16, 64, 64,
+
+                                  16, 16, 16, 16, 16, 16, 16, 16, 64, 64,
+
+                                  16, 16, 16, 16, 16, 16, 16, 16, 64, 64};
+  std::vector<double> bandwidths = {
+      1, 1, 1, 1, 1, 1, 1, 1, 10, 10,
+
+      1, 1, 1, 1, 1, 1, 1, 1, 10, 10,
+
+      1, 1, 1, 1, 1, 1, 1, 1, 10, 10,
+
+      1, 1, 1, 1, 1, 1, 1, 1, 10, 10,
+  };
+
   tinyxml2::XMLDocument xml;
   xml.LoadFile(config_file_path_.c_str());
   tinyxml2::XMLElement *root = xml.RootElement();
@@ -52,6 +69,12 @@ void Coordinator::init_cluster_info() {
       node_info_[node_id].port =
           std::stoi(node_uri.substr(pos + 1, node_uri.size()));
       node_info_[node_id].cluster_id = cluster_id;
+
+      node_info_[node_id].storage = storages[node_id];
+      node_info_[node_id].bandwidth = bandwidths[node_id];
+      node_info_[node_id].storage_cost = 0;
+      node_info_[node_id].network_cost = 0;
+
       node_id++;
     }
   }
@@ -258,6 +281,11 @@ void Coordinator::generate_placement_plan(std::vector<unsigned int> &nodes,
     select_by_load(partition_plan, nodes, stripe_id);
   } else {
     my_assert(false);
+  }
+
+  for (auto node_id : nodes) {
+    node_info_[node_id].network_cost += 1;
+    node_info_[node_id].storage_cost += 1;
   }
 }
 
@@ -637,6 +665,13 @@ size_t Coordinator::ask_for_data(std::string key, std::string client_ip,
   for (auto stripe_id : object.stripes) {
     stripe_item &stripe = stripe_info_[stripe_id];
     placement.stripe_ids.push_back(stripe_id);
+
+    // 因为只读取数据块, 所以只会对存储了数据块的节点网络开销+1
+    for (auto block_idx = 0; block_idx <= placement.k - 1; block_idx++) {
+      unsigned int node_id = stripe.nodes[block_idx];
+      node_info_[node_id].network_cost += 1;
+    }
+
     for (auto node_id : stripe.nodes) {
       node_item &node = node_info_[node_id];
       placement.datanode_ip_port.push_back({node.ip, node.port});
@@ -880,6 +915,8 @@ void Coordinator::generate_repair_plan(
       node_item &node = node_info_[stripe.nodes[block_index]];
       blocks_to_read_in_main_cluster.push_back(
           {{node.ip, node.port}, block_index});
+
+      node.network_cost += 1;
     }
     blocks_to_read_in_each_cluster.push_back(blocks_to_read_in_main_cluster);
 
@@ -894,6 +931,8 @@ void Coordinator::generate_repair_plan(
           node_item &node = node_info_[stripe.nodes[block_index]];
           blocks_to_read_in_another_cluster.push_back(
               {{node.ip, node.port}, block_index});
+
+          node.network_cost += 1;
         }
         blocks_to_read_in_each_cluster.push_back(
             blocks_to_read_in_another_cluster);
@@ -942,6 +981,8 @@ void Coordinator::generate_repair_plan(
         if (node.cluster_id == cluster_id) {
           blocks_to_read_in_cur_cluster.push_back(
               {{node.ip, node.port}, live_block.second});
+
+          node.network_cost += 1;
         }
       }
       if (cluster_id == main_cluster_id) {
